@@ -10,6 +10,17 @@ function extractReplyMessageId(msg) {
   return match ? match[1] : null;
 }
 
+function extractAtUserIds(msg) {
+  const ids = [];
+  const re = /\[CQ:at,qq=([^,\]]+)[^\]]*\]/g;
+  let match;
+  while ((match = re.exec(String(msg || ''))) !== null) {
+    const id = Number(match[1]);
+    if (Number.isFinite(id)) ids.push(id);
+  }
+  return [...new Set(ids)];
+}
+
 function formatSender(sender = {}, fallbackUserId = '') {
   return sender.card || sender.nickname || sender.user_id || fallbackUserId || '未知用户';
 }
@@ -261,6 +272,29 @@ async function buildQuotedMessageContext(event, client, cfg) {
   return `重点引用消息：\n消息ID=${replyId} ${senderName}：${summary}${imagePart}`;
 }
 
+async function buildMentionedMembersContext(event, client) {
+  if (!event.group_id) return '';
+  const selfId = Number(event.self_id || 0);
+  const ids = extractAtUserIds(event.raw_message || '')
+    .filter((id) => id && id !== selfId)
+    .slice(0, 5);
+  if (!ids.length) return '';
+
+  const lines = [];
+  for (const id of ids) {
+    const result = client?.getGroupMemberInfo
+      ? await client.getGroupMemberInfo(event.group_id, id, true)
+      : null;
+    if (result?.status === 'ok' && result.data) {
+      const name = formatSender(result.data.sender || result.data, id);
+      lines.push(`QQ=${id} ${name} 身份=${roleLabel(result.data.role || 'unknown')}`);
+    } else {
+      lines.push(`QQ=${id}`);
+    }
+  }
+  return `当前消息额外 @ 到的群成员（通常就是用户要求操作/询问的对象）：\n${lines.join('\n')}`;
+}
+
 async function buildRecentGroupContext(event, client, cfg) {
   if (!cfg.ai_group_context_enabled || !event.group_id) return '';
   const limit = Math.max(1, Math.min(50, Number(cfg.ai_group_context_messages || 20)));
@@ -326,9 +360,13 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
       `我在本群的身份是${roleLabel(managementContext.botRole)}。` +
       `群管理工具${managementContext.toolsEnabled ? '可用' : '不可用'}。` +
       '只有用户明确要求禁言、解除禁言、踢出成员等群管理动作时才调用工具；不要因为普通争吵或玩笑自动管理。' +
-      '调用工具时必须用最近群聊消息里的 QQ 号作为 target_user_id，不要猜 QQ 号。'
+      '如果当前消息额外 @ 了某个群成员，并且管理员要求禁言/解禁/踢出/封禁，优先把这个被 @ 的 QQ 作为 target_user_id。' +
+      '调用工具时必须使用上下文里明确给出的 QQ 号作为 target_user_id，不要猜 QQ 号。'
     );
   }
+
+  const mentionedMembers = await buildMentionedMembersContext(event, client);
+  if (mentionedMembers) sections.push(mentionedMembers);
 
   const quoted = await buildQuotedMessageContext(event, client, cfg);
   if (quoted) sections.push(quoted);
