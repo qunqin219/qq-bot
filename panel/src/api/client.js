@@ -53,6 +53,9 @@ export const api = {
   getMessages: (params = {}) => client.get('/messages', { params }),
   getChats: () => client.get('/chats'),
 
+  // 日志
+  getLogs: (params = {}) => client.get('/logs', { params }),
+
   // AI 上下文会话
   getConversations: () => client.get('/conversations'),
   clearConversation: (key) => client.delete(`/conversations/${encodeURIComponent(key)}`),

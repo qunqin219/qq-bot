@@ -13,6 +13,24 @@ const conversationStore = require('./conversation-store');
 
 // ── 前端静态资源目录（vite build 产物） ────────────────────
 const PANEL_DIST = path.join(__dirname, '..', 'panel', 'dist');
+const SERVER_LOG_FILE = path.join(__dirname, '..', 'logs', 'server.log');
+
+function readTailLines(filePath, lineLimit = 300, maxBytes = 512 * 1024) {
+  if (!fs.existsSync(filePath)) return [];
+  const stat = fs.statSync(filePath);
+  const bytesToRead = Math.min(stat.size, maxBytes);
+  const start = Math.max(0, stat.size - bytesToRead);
+  const buffer = Buffer.alloc(bytesToRead);
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    fs.readSync(fd, buffer, 0, bytesToRead, start);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const text = buffer.toString('utf8');
+  const lines = text.split(/\r?\n/).filter((line) => line.length > 0);
+  return lines.slice(-lineLimit);
+}
 
 // ── 认证配置 ──────────────────────────────────────────────
 const ADMIN_USERNAME = 'qunqin';
@@ -240,6 +258,25 @@ function setupApp(client) {
     const resp = await wsClient.getGroupList();
     const groups = (resp && resp.data) || [];
     return res.json({ groups, total: groups.length, connected: true });
+  });
+
+  app.get('/api/logs', requireAuth, (req, res) => {
+    const limit = Math.max(20, Math.min(2000, parseInt(req.query.limit, 10) || 300));
+    const query = String(req.query.q || '').trim().toLowerCase();
+    let lines = readTailLines(SERVER_LOG_FILE, limit, 1024 * 1024);
+    if (query) {
+      lines = lines.filter((line) => line.toLowerCase().includes(query));
+    }
+    const stat = fs.existsSync(SERVER_LOG_FILE) ? fs.statSync(SERVER_LOG_FILE) : null;
+    return res.json({
+      lines,
+      total: lines.length,
+      limit,
+      query,
+      file: SERVER_LOG_FILE,
+      size: stat?.size || 0,
+      modified_at: stat ? stat.mtime.toISOString() : null,
+    });
   });
 
   // ── 前端静态文件 / SPA 路由 ─────────────────────────

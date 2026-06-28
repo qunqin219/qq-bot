@@ -10,6 +10,7 @@ import SendMsg from './pages/SendMsg.jsx'
 import Settings from './pages/Settings.jsx'
 import Groups from './pages/Groups.jsx'
 import Conversations from './pages/Conversations.jsx'
+import Logs from './pages/Logs.jsx'
 import Login from './pages/Login.jsx'
 
 // ── 路由守卫：未登录时跳转到 /login ─────────────────────
@@ -54,6 +55,7 @@ export default function App() {
                 <Route path="/groups" element={<Groups />} />
                 <Route path="/messages" element={<Messages />} />
                 <Route path="/conversations" element={<Conversations />} />
+                <Route path="/logs" element={<Logs />} />
                 <Route path="/send" element={<SendMsg />} />
                 <Route path="/settings" element={<Settings />} />
               </Routes>
