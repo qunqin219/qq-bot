@@ -50,9 +50,18 @@ export default function Settings() {
     e.preventDefault()
     setSavingAi(true)
     try {
+      const baseUrl = String(cfg.ai_base_url || '').trim()
+      try {
+        const parsed = new URL(baseUrl)
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          throw new Error('bad protocol')
+        }
+      } catch {
+        throw new Error('API Base URL 必须是完整的 http(s) 地址，当前值看起来像被浏览器自动填充污染了')
+      }
       await api.updateConfig({
         ai_enabled: cfg.ai_enabled ?? false,
-        ai_base_url: cfg.ai_base_url,
+        ai_base_url: baseUrl,
         ai_api_key: cfg.ai_api_key,
         ai_model: cfg.ai_model,
         ai_system_prompt: cfg.ai_system_prompt,
@@ -164,7 +173,11 @@ export default function Settings() {
             私聊和每个群聊的上下文会独立保存，互不串线。
           </p>
 
-          <form onSubmit={handleSaveAi} className="space-y-6">
+          <form onSubmit={handleSaveAi} className="space-y-6" autoComplete="off">
+            <div className="pointer-events-none absolute -left-[10000px] top-auto h-px w-px overflow-hidden" aria-hidden="true">
+              <input type="text" name="username" autoComplete="username" tabIndex={-1} />
+              <input type="password" name="password" autoComplete="current-password" tabIndex={-1} />
+            </div>
             {/* 启用 AI 回复开关 */}
             <div className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900/50 px-4 py-3">
               <div>
@@ -551,6 +564,11 @@ export default function Settings() {
               </label>
               <input
                 type="text"
+                name="qqbot-ai-base-url"
+                autoComplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                spellCheck={false}
                 value={
                   cfg.ai_base_url ??
                   'https://generativelanguage.googleapis.com/v1beta'
@@ -573,6 +591,11 @@ export default function Settings() {
               </label>
               <input
                 type="password"
+                name="qqbot-ai-provider-secret"
+                autoComplete="new-password"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                spellCheck={false}
                 value={cfg.ai_api_key ?? ''}
                 onChange={(e) =>
                   setCfg({ ...cfg, ai_api_key: e.target.value })

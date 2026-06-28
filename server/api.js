@@ -38,6 +38,15 @@ const ADMIN_USERNAME = 'qunqin';
 const ADMIN_PASSWORD = 'CHANGE_ME_PANEL_PASSWORD';
 const SESSION_SECRET_KEY = 'CHANGE_ME_SESSION_SECRET';
 
+function isValidHttpUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 // ── 全局 WS 客户端实例（由 setupApp 注入） ────────────────
 let wsClient = null;
 
@@ -180,6 +189,12 @@ function setupApp(client) {
       if (body[key] !== undefined) {
         update[key] = body[key];
       }
+    }
+    if (update.ai_base_url !== undefined && !isValidHttpUrl(update.ai_base_url)) {
+      return res.status(400).json({ detail: 'AI Base URL 必须是完整的 http(s) 地址，疑似被浏览器自动填充污染，已拒绝保存' });
+    }
+    if (update.ai_api_key !== undefined && String(update.ai_api_key || '') === ADMIN_PASSWORD) {
+      return res.status(400).json({ detail: 'API Key 疑似被浏览器自动填充成面板密码，已拒绝保存' });
     }
     Object.assign(cfg, update);
     saveConfig(cfg);
