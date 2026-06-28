@@ -1,7 +1,7 @@
 // 消息处理逻辑 —— 管理员过滤、命令响应、自动回复（支持 AI 回复）
 
 const { loadConfig } = require('./config');
-const { addMessage, getMessages } = require('./message-store');
+const { addMessage, getMessages, searchMessages } = require('./message-store');
 const ai = require('./ai');
 const conversationStore = require('./conversation-store');
 
@@ -167,6 +167,21 @@ async function getMemberRole(client, groupId, userId) {
 
 function buildGroupManagementFunctionDeclarations(options = {}) {
   const declarations = [];
+  if (options.searchEnabled) {
+    declarations.push({
+      name: 'qq_search_chat_history',
+      description: '像 grep 一样在当前 QQ 会话的持久化聊天记录里按关键词搜索。用于用户提到“之前/刚才/上次/谁说过/以前聊过什么”等需要回忆历史内容的场景。只搜索当前群或当前私聊，不跨会话。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '要搜索的关键词或短语。尽量提取用户提到的核心词、人名、QQ号、话题词' },
+          limit: { type: 'integer', description: '最多返回多少条，默认 10，最多 50' },
+          regex: { type: 'boolean', description: '是否把 query 当正则表达式，默认 false' },
+        },
+        required: ['query'],
+      },
+    });
+  }
   if (options.memberListEnabled) {
     declarations.push({
       name: 'qq_get_group_members',
@@ -288,6 +303,24 @@ async function executeGroupManagementTool(name, args, context) {
   const { event, client, cfg, botRole, requesterIsAdmin } = context;
   const groupId = event.group_id;
   const targetUserId = Number(args?.target_user_id || 0);
+
+  if (name === 'qq_search_chat_history') {
+    const result = searchMessages({
+      query: args?.query || '',
+      limit: Math.max(1, Math.min(50, Number(args?.limit || 10))),
+      regex: args?.regex === true,
+      groupId: groupId || null,
+      privateUserId: groupId ? null : event.user_id,
+    });
+    return {
+      ok: true,
+      action: 'search_chat_history',
+      ...result,
+      message: result.total > 0
+        ? `找到 ${result.total} 条相关聊天记录`
+        : '没搜到相关聊天记录',
+    };
+  }
 
   function deny(message) {
     return { ok: false, message };
@@ -571,7 +604,7 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
   if (!event.group_id || !cfg.ai_group_context_enabled) return currentMsg;
 
   const sections = [
-    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。不要主动复述上下文；如果上下文不足，再简短追问。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
+    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。不要主动复述上下文；如果上下文不足，再简短追问。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。当前会话有持久化聊天记录检索工具 qq_search_chat_history；当群里在聊你不知道的内容时，可以使用检索工具搜索历史聊天记录查看。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
   ];
 
   if (managementContext) {
@@ -705,6 +738,7 @@ async function handleEvent(event, client) {
 
   const aiInput = await buildGroupAwarePrompt(event, client, cfg, msg, managementContext);
   const functionDeclarations = buildGroupManagementFunctionDeclarations({
+    searchEnabled: true,
     memberListEnabled: memberListToolsEnabled,
     managementEnabled: managementToolsEnabled,
   });
