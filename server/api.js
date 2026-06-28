@@ -10,6 +10,7 @@ const cookieParser = require('cookie-parser');
 const { loadConfig, saveConfig } = require('./config');
 const { getMessages, getChats } = require('./message-store');
 const conversationStore = require('./conversation-store');
+const memoryStore = require('./memory-store');
 
 // ── 前端静态资源目录（vite build 产物） ────────────────────
 const PANEL_DIST = path.join(__dirname, '..', 'panel', 'dist');
@@ -173,6 +174,7 @@ function setupApp(client) {
       'ai_filter_stickers',
       'ai_group_reply_quote_enabled',
       'ai_group_reply_quote_prefer_quoted',
+      'ai_memory_enabled',
     ];
     for (const key of allowedKeys) {
       if (body[key] !== undefined) {
@@ -247,6 +249,51 @@ function setupApp(client) {
 
   app.delete('/api/conversations', requireAuth, (req, res) => {
     conversationStore.clearAllHistories();
+    return res.json({ ok: true });
+  });
+
+  app.get('/api/memories', requireAuth, (req, res) => {
+    const key = String(req.query.key || '').trim();
+    if (key) {
+      const memories = memoryStore.getForConversation(key);
+      return res.json({ memories, total: memories.length, key });
+    }
+    const memories = memoryStore.getAll();
+    return res.json({ memories, total: memories.length, summaries: memoryStore.listSummaries() });
+  });
+
+  app.post('/api/memories', requireAuth, (req, res) => {
+    const key = String(req.body?.key || '').trim();
+    const content = String(req.body?.content || '').trim();
+    const memory = memoryStore.add(key, content);
+    if (!memory) return res.status(400).json({ detail: 'key 和 content 不能为空' });
+    return res.json({ ok: true, memory });
+  });
+
+  app.put('/api/memories/:id', requireAuth, (req, res) => {
+    const id = Number(req.params.id || 0);
+    const key = String(req.body?.key || '').trim();
+    const content = String(req.body?.content || '').trim();
+    const memory = memoryStore.update(key, id, content);
+    if (!memory) return res.status(404).json({ detail: '未找到对应会话下的记忆' });
+    return res.json({ ok: true, memory });
+  });
+
+  app.delete('/api/memories/:id', requireAuth, (req, res) => {
+    const id = Number(req.params.id || 0);
+    const key = String(req.query.key || req.body?.key || '').trim();
+    const ok = memoryStore.remove(key, id);
+    if (!ok) return res.status(404).json({ detail: '未找到对应会话下的记忆' });
+    return res.json({ ok: true });
+  });
+
+  app.delete('/api/memories', requireAuth, (req, res) => {
+    const key = String(req.query.key || '').trim();
+    if (key) {
+      memoryStore.deleteForConversation(key);
+      return res.json({ ok: true, key });
+    }
+    memoryStore.clearAll();
     return res.json({ ok: true });
   });
 

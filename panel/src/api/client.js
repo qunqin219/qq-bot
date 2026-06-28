@@ -60,6 +60,13 @@ export const api = {
   getConversations: () => client.get('/conversations'),
   clearConversation: (key) => client.delete(`/conversations/${encodeURIComponent(key)}`),
   clearAllConversations: () => client.delete('/conversations'),
+
+  // 个性化记忆
+  getMemories: (params = {}) => client.get('/memories', { params }),
+  createMemory: (key, content) => client.post('/memories', { key, content }),
+  updateMemory: (id, key, content) => client.put(`/memories/${id}`, { key, content }),
+  deleteMemory: (id, key) => client.delete(`/memories/${id}`, { params: { key } }),
+  clearMemories: (key) => client.delete('/memories', { params: key ? { key } : {} }),
 }
 
 export default client

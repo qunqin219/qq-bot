@@ -31,10 +31,11 @@ function getBeijingTimeText() {
   return `当前北京时间：${get('year')}年${get('month')}月${get('day')}日，${get('weekday')}，${get('hour')}:${get('minute')}:${get('second')}。`;
 }
 
-function buildSystemInstruction(systemPrompt) {
+function buildSystemInstruction(systemPrompt, extraSystemInstruction = '') {
   return [
     getBeijingTimeText(),
     String(systemPrompt || '').trim(),
+    String(extraSystemInstruction || '').trim(),
   ].filter(Boolean).join('\n');
 }
 
@@ -233,7 +234,7 @@ async function chat(userMessage, history, cfg, options = {}) {
     contents: await buildContents(userMessage, history, cfg),
   };
 
-  const systemInstruction = buildSystemInstruction(systemPrompt);
+  const systemInstruction = buildSystemInstruction(systemPrompt, options.extraSystemInstruction);
   if (systemInstruction) {
     body.systemInstruction = {
       parts: [{ text: systemInstruction }],

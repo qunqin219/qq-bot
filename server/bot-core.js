@@ -4,6 +4,7 @@ const { loadConfig } = require('./config');
 const { addMessage, getMessages, searchMessages } = require('./message-store');
 const ai = require('./ai');
 const conversationStore = require('./conversation-store');
+const memoryStore = require('./memory-store');
 
 function extractReplyMessageId(msg) {
   const match = String(msg || '').match(/\[CQ:reply,id=([^\],]+)[^\]]*\]/);
@@ -48,6 +49,61 @@ function formatSender(sender = {}, fallbackUserId = '') {
 function getEventSenderName(event) {
   const sender = event?.sender || {};
   return formatSender(sender, event?.user_id || '未知用户');
+}
+
+function getCurrentHourText() {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((p) => p.type === type)?.value || '';
+  return `${get('year')}年${get('month')}月${get('day')}日的${get('hour')}点`;
+}
+
+function buildMemorySystemPrompt(conversationKey) {
+  const mems = memoryStore.getForConversation(conversationKey);
+  const currentHour = getCurrentHourText();
+  const lines = [
+    '## Memories',
+    'These are memories that you can reference in the future conversations.',
+    '<memories>',
+  ];
+  for (const m of mems) {
+    lines.push('<record>');
+    lines.push(`<id>${m.id}</id>`);
+    lines.push(`<content>${m.content}</content>`);
+    lines.push('</record>');
+  }
+  lines.push('</memories>');
+  lines.push(`
+## Memory Tool
+你是一个无状态的大模型，你无法存储记忆，因此为了记住信息，你需要使用**记忆工具**。
+你可以使用 \`create_memory\`, \`edit_memory\`, \`delete_memory\` 工具创建、更新或删除记忆。
+- 如果记忆中没有相关信息，请使用 create_memory 创建一条新的记录。
+- 如果已有相关记录，请使用 edit_memory 更新内容。
+- 若记忆过时或无用，请使用 delete_memory 删除。
+这些记忆会自动包含在未来的对话上下文中，在<memories>标签内。
+请勿在记忆中存储敏感信息，敏感信息包括：用户的民族、宗教信仰、性取向、政治观点及党派归属、性生活、犯罪记录等。
+在与用户聊天过程中，你可以像一个私人秘书一样**主动的**记录用户相关的信息到记忆里，包括但不限于：
+- 用户昵称/姓名
+- 年龄/性别/兴趣爱好
+- 计划事项等
+- 聊天风格偏好
+- 工作相关
+- 首次聊天时间
+- ...
+请主动调用工具记录，而不是需要用户要求。
+记忆如果包含日期信息，请包含在内，请使用绝对时间格式，并且当前时间是${currentHour}。
+无需告知用户你已更改记忆记录，也不要在对话中直接显示记忆内容，除非用户主动要求。
+相似或相关的记忆应合并为一条记录，而不要重复记录，过时记录应删除。
+你可以在和用户闲聊的时候暗示用户你能记住东西。
+`);
+  lines.push(`注意：这些记忆只属于当前 QQ 会话 ${conversationKey}，不要跨私聊或其他群聊使用。`);
+  return lines.join('\n');
 }
 
 function parseAiReplyDirective(text) {
@@ -167,6 +223,44 @@ async function getMemberRole(client, groupId, userId) {
 
 function buildGroupManagementFunctionDeclarations(options = {}) {
   const declarations = [];
+  if (options.memoryEnabled) {
+    declarations.push(
+      {
+        name: 'create_memory',
+        description: 'create a memory record',
+        parameters: {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: 'The content of the memory record' },
+          },
+          required: ['content'],
+        },
+      },
+      {
+        name: 'edit_memory',
+        description: 'update a memory record',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer', description: 'The id of the memory record' },
+            content: { type: 'string', description: 'The content of the memory record' },
+          },
+          required: ['id', 'content'],
+        },
+      },
+      {
+        name: 'delete_memory',
+        description: 'delete a memory record',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer', description: 'The id of the memory record' },
+          },
+          required: ['id'],
+        },
+      }
+    );
+  }
   if (options.searchEnabled) {
     declarations.push({
       name: 'qq_search_chat_history',
@@ -301,10 +395,48 @@ async function getManageableMembers(client, groupId, cfg, event, botRole) {
   return { ok: true, total_count: result.data.length, members };
 }
 
+function executeMemoryTool(name, args, conversationKey, cfg) {
+  if (cfg.ai_memory_enabled !== true) {
+    return { ok: false, message: '记忆功能未启用' };
+  }
+  if (name === 'create_memory') {
+    const content = String(args?.content || '').trim();
+    if (!content) return { ok: false, message: 'Memory content must not be empty.' };
+    const memory = memoryStore.add(conversationKey, content);
+    return memory
+      ? { ok: true, action: 'create_memory', id: memory.id, content: memory.content, message: memory.content }
+      : { ok: false, message: '创建记忆失败' };
+  }
+  if (name === 'edit_memory') {
+    const id = Number(args?.id || 0);
+    const content = String(args?.content || '').trim();
+    if (!id) return { ok: false, message: 'Memory id must be a positive integer.' };
+    if (!content) return { ok: false, message: 'Memory content must not be empty.' };
+    const memory = memoryStore.update(conversationKey, id, content);
+    return memory
+      ? { ok: true, action: 'edit_memory', id: memory.id, content: memory.content, message: memory.content }
+      : { ok: false, message: `No memory record was found for id ${id}.` };
+  }
+  if (name === 'delete_memory') {
+    const id = Number(args?.id || 0);
+    if (!id) return { ok: false, message: 'Memory id must be a positive integer.' };
+    const ok = memoryStore.remove(conversationKey, id);
+    return ok
+      ? { ok: true, action: 'delete_memory', id, message: 'deleted' }
+      : { ok: false, message: `No memory record was found for id ${id}.` };
+  }
+  return null;
+}
+
 async function executeGroupManagementTool(name, args, context) {
   const { event, client, cfg, botRole, requesterIsAdmin } = context;
   const groupId = event.group_id;
   const targetUserId = Number(args?.target_user_id || 0);
+
+  if (name === 'create_memory' || name === 'edit_memory' || name === 'delete_memory') {
+    const conversationKey = conversationStore.getConversationKey(event);
+    return executeMemoryTool(name, args, conversationKey, cfg);
+  }
 
   if (name === 'qq_search_chat_history') {
     const result = searchMessages({
@@ -743,15 +875,20 @@ async function handleEvent(event, client) {
 
   const aiInput = await buildGroupAwarePrompt(event, client, cfg, msg, managementContext);
   const functionDeclarations = buildGroupManagementFunctionDeclarations({
+    memoryEnabled: cfg.ai_memory_enabled === true,
     searchEnabled: true,
     memberListEnabled: memberListToolsEnabled,
     managementEnabled: managementToolsEnabled,
   });
+  const memorySystemPrompt = cfg.ai_memory_enabled === true
+    ? buildMemorySystemPrompt(conversationKey)
+    : '';
 
   let aiReply;
   try {
     aiReply = await ai.chat(aiInput, history, cfg, {
       functionDeclarations,
+      extraSystemInstruction: memorySystemPrompt,
       executeFunctionCall: async (name, args) => {
         console.log(`[ToolCall] ${name} args=${JSON.stringify(args || {})}`);
         const result = await executeGroupManagementTool(name, args, {

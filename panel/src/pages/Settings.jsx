@@ -72,6 +72,7 @@ export default function Settings() {
         ai_group_reply_quote_enabled: cfg.ai_group_reply_quote_enabled ?? true,
         ai_group_reply_quote_prefer_quoted:
           cfg.ai_group_reply_quote_prefer_quoted ?? true,
+        ai_memory_enabled: cfg.ai_memory_enabled ?? true,
       })
       success('AI 配置已保存')
     } catch (e) {
@@ -186,6 +187,33 @@ export default function Settings() {
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
                     cfg.ai_enabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* 个性化记忆 */}
+            <div className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900/50 px-4 py-3">
+              <div>
+                <div className="text-sm font-medium text-slate-200">
+                  启用个性化记忆
+                </div>
+                <div className="mt-0.5 text-xs text-slate-500">
+                  开启后，模型可按当前私聊/群聊会话独立创建、更新和删除记忆。
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setCfg({ ...cfg, ai_memory_enabled: !cfg.ai_memory_enabled })
+                }
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition ${
+                  (cfg.ai_memory_enabled ?? true) ? 'bg-emerald-600' : 'bg-slate-600'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                    (cfg.ai_memory_enabled ?? true) ? 'translate-x-6' : 'translate-x-1'
                   }`}
                 />
               </button>

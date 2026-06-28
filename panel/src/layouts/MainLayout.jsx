@@ -10,6 +10,7 @@ const navItems = [
   { to: '/groups', label: '群管理', icon: '🏠' },
   { to: '/messages', label: '最近消息', icon: '💬' },
   { to: '/conversations', label: '上下文', icon: '🧠' },
+  { to: '/memories', label: '个性记忆', icon: '📌' },
   { to: '/logs', label: '运行日志', icon: '📜' },
   { to: '/send', label: '发送消息', icon: '✉️' },
   { to: '/settings', label: '设置', icon: '⚙️' },

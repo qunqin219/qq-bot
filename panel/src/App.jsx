@@ -10,6 +10,7 @@ import SendMsg from './pages/SendMsg.jsx'
 import Settings from './pages/Settings.jsx'
 import Groups from './pages/Groups.jsx'
 import Conversations from './pages/Conversations.jsx'
+import Memories from './pages/Memories.jsx'
 import Logs from './pages/Logs.jsx'
 import Login from './pages/Login.jsx'
 
@@ -55,6 +56,7 @@ export default function App() {
                 <Route path="/groups" element={<Groups />} />
                 <Route path="/messages" element={<Messages />} />
                 <Route path="/conversations" element={<Conversations />} />
+                <Route path="/memories" element={<Memories />} />
                 <Route path="/logs" element={<Logs />} />
                 <Route path="/send" element={<SendMsg />} />
                 <Route path="/settings" element={<Settings />} />

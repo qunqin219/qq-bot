@@ -33,6 +33,7 @@ const DEFAULT_CONFIG = {
   ai_filter_stickers: true,              // 是否过滤 QQ 表情包/动画表情，避免污染 AI 上下文
   ai_group_reply_quote_enabled: true,    // 群聊 AI 回复时是否引用消息（不额外 @）
   ai_group_reply_quote_prefer_quoted: true, // 如果用户本身引用了消息，优先引用被引用消息
+  ai_memory_enabled: true,               // 是否启用按会话隔离的个性化记忆
 };
 
 /**
