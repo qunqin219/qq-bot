@@ -741,7 +741,7 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
   if (!event.group_id || !cfg.ai_group_context_enabled) return currentMsg;
 
   const sections = [
-    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。不要主动复述上下文；如果上下文不足，不要硬猜，先判断缺的是什么。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。如果缺的是群内前情、梗、代称、某人之前说过什么、某话题在本群怎么聊过、这句话接的是哪条上文，使用持久化聊天记录检索工具 qq_search_chat_history；它支持关键词、发言人QQ和时间范围过滤，query 可以为空；提到“我/我的发言”时用当前触发用户 QQ 作为 user_id。如果缺的是外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格/版本/状态等实时信息，并且联网工具可用，可以使用联网搜索或 URL 上下文。普通闲聊、能从当前消息和近期上下文直接回答的问题，不要为了显得认真而检索或联网。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
+    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。当前用户这次明确输入的文字指令优先级最高；同条消息里的图片、引用消息和最近群聊上下文只作为辅助材料。除非用户明确说“看图/图里/截图/这张图/识别图片/日志怎么了”等，否则不要因为同条消息里的图片内容而偏离当前文字指令。不要主动复述上下文；如果上下文不足，不要硬猜，先判断缺的是什么。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。如果缺的是群内前情、梗、代称、某人之前说过什么、某话题在本群怎么聊过、这句话接的是哪条上文，使用持久化聊天记录检索工具 qq_search_chat_history；它支持关键词、发言人QQ和时间范围过滤，query 可以为空；提到“我/我的发言”时用当前触发用户 QQ 作为 user_id。如果缺的是外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格/版本/状态等实时信息，并且联网工具可用，可以使用联网搜索或 URL 上下文。普通闲聊、能从当前消息和近期上下文直接回答的问题，不要为了显得认真而检索或联网。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
   ];
 
   if (managementContext) {
@@ -775,6 +775,71 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
 
   sections.push(`当前用户消息：\n${annotateAtMentions(currentMsg, event.self_id)}`);
   return sections.join('\n\n');
+}
+
+async function buildAiRuntimePreview({ event, client, cfg }) {
+  if (!event) throw new Error('event is required');
+  const runtimeCfg = cfg || loadConfig();
+  let msg = event.raw_message || '';
+  if (!msg) {
+    const raw = event.message;
+    msg = typeof raw === 'string' ? raw : String(raw || '');
+  }
+
+  const groupId = event.group_id;
+  const userId = event.user_id || 0;
+  const admins = runtimeCfg.admins || [];
+  const isAdmin = admins.includes(userId);
+  const conversationKey = conversationStore.getConversationKey(event);
+  const contextTurns = Math.max(1, Number(runtimeCfg.ai_context_turns || 10));
+  const history = runtimeCfg.ai_context_enabled
+    ? conversationStore.getHistory(conversationKey, contextTurns * 2)
+    : [];
+
+  const botRole = groupId
+    ? await getMemberRole(client, groupId, event.self_id)
+    : 'none';
+  const managementToolsEnabled = Boolean(
+    groupId &&
+    isAdmin &&
+    ['owner', 'admin'].includes(botRole)
+  );
+  const memberListToolsEnabled = Boolean(groupId && isAdmin);
+  const managementContext = groupId
+    ? {
+      botRole,
+      toolsEnabled: managementToolsEnabled,
+      memberListEnabled: memberListToolsEnabled,
+      requesterIsAdmin: isAdmin,
+    }
+    : null;
+
+  const aiInput = await buildGroupAwarePrompt(event, client, runtimeCfg, msg, managementContext);
+  const functionDeclarations = buildGroupManagementFunctionDeclarations({
+    memoryEnabled: runtimeCfg.ai_memory_enabled === true,
+    searchEnabled: true,
+    memberListEnabled: memberListToolsEnabled,
+    managementEnabled: managementToolsEnabled,
+  });
+  const extraSystemInstruction = runtimeCfg.ai_memory_enabled === true
+    ? buildMemorySystemPrompt(conversationKey)
+    : '';
+  const requestBody = await ai.buildRequestBody(aiInput, history, runtimeCfg, {
+    functionDeclarations,
+    extraSystemInstruction,
+  });
+
+  return {
+    conversationKey,
+    contextTurns,
+    history,
+    botRole,
+    managementContext,
+    functionDeclarations,
+    extraSystemInstruction,
+    aiInput,
+    requestBody,
+  };
 }
 
 /**
@@ -849,46 +914,21 @@ async function handleEvent(event, client) {
   let cleanMsg = summarizeRawMessage(msg, event.self_id);
   if (!cleanMsg) cleanMsg = /\[CQ:image,/.test(msg) ? '[图片]' : '你好';
 
-  const conversationKey = conversationStore.getConversationKey(event);
-  const contextTurns = Math.max(1, Number(cfg.ai_context_turns || 10));
-  const history = cfg.ai_context_enabled
-    ? conversationStore.getHistory(conversationKey, contextTurns * 2)
-    : [];
-
-  const botRole = groupId
-    ? await getMemberRole(client, groupId, event.self_id)
-    : 'none';
-  const managementToolsEnabled = Boolean(
-    groupId &&
-    isAdmin &&
-    ['owner', 'admin'].includes(botRole)
-  );
-  const memberListToolsEnabled = Boolean(groupId && isAdmin);
-  const managementContext = groupId
-    ? {
-      botRole,
-      toolsEnabled: managementToolsEnabled,
-      memberListEnabled: memberListToolsEnabled,
-      requesterIsAdmin: isAdmin,
-    }
-    : null;
-
-  const aiInput = await buildGroupAwarePrompt(event, client, cfg, msg, managementContext);
-  const functionDeclarations = buildGroupManagementFunctionDeclarations({
-    memoryEnabled: cfg.ai_memory_enabled === true,
-    searchEnabled: true,
-    memberListEnabled: memberListToolsEnabled,
-    managementEnabled: managementToolsEnabled,
-  });
-  const memorySystemPrompt = cfg.ai_memory_enabled === true
-    ? buildMemorySystemPrompt(conversationKey)
-    : '';
+  const runtime = await buildAiRuntimePreview({ event, client, cfg });
+  const {
+    conversationKey,
+    contextTurns,
+    botRole,
+    functionDeclarations,
+    extraSystemInstruction,
+    aiInput,
+  } = runtime;
 
   let aiReply;
   try {
-    aiReply = await ai.chat(aiInput, history, cfg, {
+    aiReply = await ai.chat(aiInput, runtime.history, cfg, {
       functionDeclarations,
-      extraSystemInstruction: memorySystemPrompt,
+      extraSystemInstruction,
       executeFunctionCall: async (name, args) => {
         console.log(`[ToolCall] ${name} args=${JSON.stringify(args || {})}`);
         const result = await executeGroupManagementTool(name, args, {
@@ -988,4 +1028,4 @@ async function handleCommand(cmd, event, client, _cfg) {
   }
 }
 
-module.exports = { handleEvent, handleCommand };
+module.exports = { handleEvent, handleCommand, buildAiRuntimePreview };

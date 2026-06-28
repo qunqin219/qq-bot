@@ -209,6 +209,40 @@ function extractOutputText(data) {
     .trim();
 }
 
+async function buildRequestBody(userMessage, history, cfg, options = {}) {
+  const systemPrompt = cfg?.ai_system_prompt || '';
+  const body = {
+    contents: await buildContents(userMessage, history, cfg),
+  };
+
+  const systemInstruction = buildSystemInstruction(systemPrompt, options.extraSystemInstruction);
+  if (systemInstruction) {
+    body.systemInstruction = {
+      parts: [{ text: systemInstruction }],
+    };
+  }
+
+  const generationConfig = {};
+  if (cfg?.ai_thinking_enabled === true) {
+    generationConfig.thinkingConfig = {
+      thinkingBudget: thinkingBudgetFromLevel(cfg.ai_thinking_level),
+    };
+  }
+  if (Object.keys(generationConfig).length > 0) {
+    body.generationConfig = generationConfig;
+  }
+
+  const functionDeclarations = Array.isArray(options.functionDeclarations)
+    ? options.functionDeclarations
+    : [];
+  const tools = buildTools(cfg || {}, functionDeclarations);
+  if (tools.length > 0) {
+    body.tools = tools;
+  }
+
+  return body;
+}
+
 /**
  * 调用 Gemini generateContent 生成 AI 回复。
  *
@@ -227,37 +261,9 @@ async function chat(userMessage, history, cfg, options = {}) {
     .replace(/\/+$/, '');
   const model = cfg.ai_model || 'gemini-3.5-flash';
   const apiKey = String(cfg.ai_api_key || '').trim();
-  const systemPrompt = cfg.ai_system_prompt || '';
 
   const url = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const body = {
-    contents: await buildContents(userMessage, history, cfg),
-  };
-
-  const systemInstruction = buildSystemInstruction(systemPrompt, options.extraSystemInstruction);
-  if (systemInstruction) {
-    body.systemInstruction = {
-      parts: [{ text: systemInstruction }],
-    };
-  }
-
-  const generationConfig = {};
-  if (cfg.ai_thinking_enabled === true) {
-    generationConfig.thinkingConfig = {
-      thinkingBudget: thinkingBudgetFromLevel(cfg.ai_thinking_level),
-    };
-  }
-  if (Object.keys(generationConfig).length > 0) {
-    body.generationConfig = generationConfig;
-  }
-
-  const functionDeclarations = Array.isArray(options.functionDeclarations)
-    ? options.functionDeclarations
-    : [];
-  const tools = buildTools(cfg, functionDeclarations);
-  if (tools.length > 0) {
-    body.tools = tools;
-  }
+  const body = await buildRequestBody(userMessage, history, cfg, options);
 
   try {
     const resp = await fetch(url, {
@@ -333,4 +339,4 @@ async function chat(userMessage, history, cfg, options = {}) {
   }
 }
 
-module.exports = { chat, stripCqCodes, extractImageUrls, isStickerMessage };
+module.exports = { chat, stripCqCodes, extractImageUrls, isStickerMessage, buildRequestBody };
