@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build outputs
+panel/dist/
+dist/
+build/
+
+# runtime data / logs
+logs/
+*.log
+*.pid
+qq-bot.pid
+messages.json
+conversations.json
+
+# local config / secrets
+config.json
+.env
+.env.*
+!.env.example
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+*.swp

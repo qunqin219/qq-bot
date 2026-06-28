@@ -1,0 +1,27 @@
+{
+  "name": "qq-bot-server",
+  "version": "1.0.0",
+  "description": "QQ Bot 管理面板后端 —— Node.js + Express + OneBot WebSocket",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "bot:restart": "bash scripts/restart.sh restart",
+    "bot:stop": "bash scripts/restart.sh stop",
+    "bot:status": "bash scripts/restart.sh status",
+    "check": "node --check index.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "ws": "^8.18.0"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0"
+  }
+}
