@@ -109,6 +109,8 @@ function searchMessages(options = {}) {
   const scanLimit = Math.max(limit, Math.min(SEARCH_SCAN_LIMIT, Number(options.scanLimit) || SEARCH_SCAN_LIMIT));
   const groupId = options.groupId !== undefined && options.groupId !== null ? Number(options.groupId) : null;
   const privateUserId = options.privateUserId !== undefined && options.privateUserId !== null ? Number(options.privateUserId) : null;
+  const senderUserId = options.userId !== undefined && options.userId !== null ? Number(options.userId) : null;
+  const messageType = String(options.messageType || '').trim();
   const fromTs = options.fromTime ? Date.parse(options.fromTime) : null;
   const toTs = options.toTime ? Date.parse(options.toTime) : null;
   const regex = options.regex === true ? safeRegex(query) : null;
@@ -117,6 +119,8 @@ function searchMessages(options = {}) {
   let msgs = _load();
   if (groupId) msgs = msgs.filter((m) => Number(m.group_id) === groupId);
   if (privateUserId) msgs = msgs.filter((m) => !m.group_id && Number(m.user_id) === privateUserId);
+  if (senderUserId) msgs = msgs.filter((m) => Number(m.user_id) === senderUserId);
+  if (messageType) msgs = msgs.filter((m) => String(m.message_type || '') === messageType);
   if (Number.isFinite(fromTs)) msgs = msgs.filter((m) => Date.parse(m.time || '') >= fromTs);
   if (Number.isFinite(toTs)) msgs = msgs.filter((m) => Date.parse(m.time || '') <= toTs);
 
@@ -143,6 +147,12 @@ function searchMessages(options = {}) {
   return {
     query,
     scope: groupId ? `group:${groupId}` : (privateUserId ? `private:${privateUserId}` : 'all'),
+    filters: {
+      user_id: senderUserId || null,
+      message_type: messageType || null,
+      from_time: Number.isFinite(fromTs) ? new Date(fromTs).toISOString() : null,
+      to_time: Number.isFinite(toTs) ? new Date(toTs).toISOString() : null,
+    },
     total: matches.length,
     limit,
     matches,

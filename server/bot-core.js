@@ -170,15 +170,17 @@ function buildGroupManagementFunctionDeclarations(options = {}) {
   if (options.searchEnabled) {
     declarations.push({
       name: 'qq_search_chat_history',
-      description: '像 grep 一样在当前 QQ 会话的持久化聊天记录里按关键词搜索。用于用户提到“之前/刚才/上次/谁说过/以前聊过什么”等需要回忆历史内容的场景。只搜索当前群或当前私聊，不跨会话。',
+      description: '像 grep 一样在当前 QQ 会话的持久化聊天记录里搜索。可按关键词、发言人 QQ、时间范围过滤。用于用户提到“之前/刚才/上次/谁说过/某人说过什么/某人最近聊了什么”等需要回忆历史内容的场景。只搜索当前群或当前私聊，不跨会话。',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: '要搜索的关键词或短语。尽量提取用户提到的核心词、人名、QQ号、话题词' },
+          query: { type: 'string', description: '可选。要搜索的关键词或短语；如果只想查某个 QQ 最近说了什么，可以不填 query，只传 user_id' },
+          user_id: { type: 'integer', description: '可选。只返回这个 QQ 号发出的消息' },
           limit: { type: 'integer', description: '最多返回多少条，默认 10，最多 50' },
           regex: { type: 'boolean', description: '是否把 query 当正则表达式，默认 false' },
+          from_time: { type: 'string', description: '可选。只搜索此时间之后的消息，ISO 时间字符串' },
+          to_time: { type: 'string', description: '可选。只搜索此时间之前的消息，ISO 时间字符串' },
         },
-        required: ['query'],
       },
     });
   }
@@ -307,8 +309,11 @@ async function executeGroupManagementTool(name, args, context) {
   if (name === 'qq_search_chat_history') {
     const result = searchMessages({
       query: args?.query || '',
+      userId: args?.user_id,
       limit: Math.max(1, Math.min(50, Number(args?.limit || 10))),
       regex: args?.regex === true,
+      fromTime: args?.from_time,
+      toTime: args?.to_time,
       groupId: groupId || null,
       privateUserId: groupId ? null : event.user_id,
     });
@@ -604,7 +609,7 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
   if (!event.group_id || !cfg.ai_group_context_enabled) return currentMsg;
 
   const sections = [
-    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。不要主动复述上下文；如果上下文不足，再简短追问。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。当前会话有持久化聊天记录检索工具 qq_search_chat_history；当群里在聊你不知道的内容时，可以使用检索工具搜索历史聊天记录查看。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
+    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。不要主动复述上下文；如果上下文不足，再简短追问。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。当前会话有持久化聊天记录检索工具 qq_search_chat_history，支持关键词、发言人QQ和时间范围过滤；当群里在聊你不知道的内容时，可以使用检索工具搜索历史聊天记录查看。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
   ];
 
   if (managementContext) {
