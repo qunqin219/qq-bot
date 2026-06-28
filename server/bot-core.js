@@ -163,6 +163,39 @@ function buildGroupManagementFunctionDeclarations(options = {}) {
 
   declarations.push(
     {
+      name: 'qq_set_group_whole_ban',
+      description: '开启或关闭当前 QQ 群的全员禁言。用户说“开启群禁言/全员禁言/全群禁言/关闭群禁言”时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          enable: { type: 'boolean', description: 'true 开启全员禁言，false 关闭全员禁言' },
+          reason: { type: 'string', description: '简短原因' },
+        },
+        required: ['enable'],
+      },
+    },
+    {
+      name: 'qq_mute_all_manageable_members',
+      description: '批量禁言当前群里 bot 有权限操作的普通成员。用户说“把群里所有人都禁言/给所有人上X分钟”时使用；不要用于“开启全员禁言”这种群开关。',
+      parameters: {
+        type: 'object',
+        properties: {
+          duration_seconds: { type: 'integer', description: '禁言秒数。未说明时用 600 秒，最长 2592000 秒' },
+          reason: { type: 'string', description: '简短原因' },
+        },
+      },
+    },
+    {
+      name: 'qq_unmute_all_manageable_members',
+      description: '批量解除当前群里 bot 有权限操作的普通成员禁言。用户说“把所有禁言都解开/给所有人解禁”时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: '简短原因' },
+        },
+      },
+    },
+    {
       name: 'qq_mute_member',
       description: '禁言当前 QQ 群中的某个成员。只在 bot 是管理员或群主，且触发者有权限时可执行。',
       parameters: {
@@ -203,6 +236,31 @@ function buildGroupManagementFunctionDeclarations(options = {}) {
   );
 
   return declarations;
+}
+
+async function getManageableMembers(client, groupId, cfg, event, botRole) {
+  const result = await client.getGroupMemberList(groupId);
+  if (result?.status !== 'ok' || !Array.isArray(result.data)) {
+    return {
+      ok: false,
+      message: `获取群成员列表失败：${result?.wording || result?.msg || '未知错误'}`,
+      members: [],
+    };
+  }
+
+  const adminSet = new Set((cfg.admins || []).map(Number));
+  const members = result.data
+    .map((m) => ({
+      user_id: Number(m.user_id),
+      nickname: m.nickname || '',
+      card: m.card || '',
+      display_name: m.card || m.nickname || String(m.user_id),
+      role: m.role || 'unknown',
+    }))
+    .filter((m) => m.user_id && m.user_id !== Number(event.self_id))
+    .filter((m) => !adminSet.has(m.user_id))
+    .filter((m) => canManageRole(botRole, m.role));
+  return { ok: true, total_count: result.data.length, members };
 }
 
 async function executeGroupManagementTool(name, args, context) {
@@ -256,6 +314,55 @@ async function executeGroupManagementTool(name, args, context) {
   if (!['owner', 'admin'].includes(botRole)) {
     return deny(`我在这个群只是${roleLabel(botRole)}，没有群管理权限`);
   }
+
+  if (name === 'qq_set_group_whole_ban') {
+    if (!client?.setGroupWholeBan) return deny('当前 OneBot 客户端不支持全员禁言');
+    const enable = args?.enable === true;
+    const result = await client.setGroupWholeBan(groupId, enable);
+    const ok = result?.status === 'ok';
+    return {
+      ok,
+      action: 'whole_ban',
+      enable,
+      message: ok
+        ? (enable ? '已开启全员禁言' : '已关闭全员禁言')
+        : `设置全员禁言失败：${result?.wording || result?.msg || '未知错误'}`,
+    };
+  }
+
+  if (name === 'qq_mute_all_manageable_members' || name === 'qq_unmute_all_manageable_members') {
+    const list = await getManageableMembers(client, groupId, cfg, event, botRole);
+    if (!list.ok) return deny(list.message);
+    const duration = name === 'qq_mute_all_manageable_members'
+      ? Math.max(60, Math.min(2592000, Number(args?.duration_seconds || 600)))
+      : 0;
+    const results = [];
+    for (const member of list.members) {
+      const result = await client.setGroupBan(groupId, member.user_id, duration);
+      results.push({
+        user_id: member.user_id,
+        display_name: member.display_name,
+        ok: result?.status === 'ok',
+        error: result?.status === 'ok' ? '' : (result?.wording || result?.msg || '未知错误'),
+      });
+    }
+    const success = results.filter((item) => item.ok);
+    const failed = results.filter((item) => !item.ok);
+    return {
+      ok: failed.length === 0,
+      action: duration > 0 ? 'mute_all_manageable' : 'unmute_all_manageable',
+      duration_seconds: duration,
+      total_group_members: list.total_count,
+      target_count: list.members.length,
+      success_count: success.length,
+      failed_count: failed.length,
+      results,
+      message: duration > 0
+        ? `已批量禁言 ${success.length}/${list.members.length} 个可操作成员`
+        : `已批量解除禁言 ${success.length}/${list.members.length} 个可操作成员`,
+    };
+  }
+
   if (!targetUserId) return deny('没找到要操作的目标 QQ');
   if (targetUserId === Number(event.self_id)) return deny('不能操作我自己');
   if ((cfg.admins || []).map(Number).includes(targetUserId)) return deny('不能操作配置里的管理员');
@@ -415,6 +522,9 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
       `群管理工具${managementContext.toolsEnabled ? '可用' : '不可用'}。` +
       `群成员列表工具${managementContext.memberListEnabled ? '可用' : '不可用'}。` +
       '如果需要通过昵称、群名片或模糊称呼查 QQ 号，可以调用 qq_get_group_members；需要全部成员时不传 keyword，需要筛选时传 keyword。' +
+      '如果管理员说“开启/关闭全员禁言/群禁言”，调用 qq_set_group_whole_ban。' +
+      '如果管理员说“把群里所有人都禁言/给所有人上X分钟”，调用 qq_mute_all_manageable_members，不要只查成员列表。' +
+      '如果管理员说“把所有禁言都解开/所有人解禁”，调用 qq_unmute_all_manageable_members。' +
       '只有用户明确要求禁言、解除禁言、踢出成员等群管理动作时才调用管理工具；不要因为普通争吵或玩笑自动管理。' +
       '如果当前消息额外 @ 了某个群成员，并且管理员要求禁言/解禁/踢出/封禁，优先把这个被 @ 的 QQ 作为 target_user_id。' +
       '调用工具时必须使用上下文里明确给出的 QQ 号作为 target_user_id，不要猜 QQ 号。'
@@ -540,13 +650,26 @@ async function handleEvent(event, client) {
   try {
     aiReply = await ai.chat(aiInput, history, cfg, {
       functionDeclarations,
-      executeFunctionCall: (name, args) => executeGroupManagementTool(name, args, {
-        event,
-        client,
-        cfg,
-        botRole,
-        requesterIsAdmin: isAdmin,
-      }),
+      executeFunctionCall: async (name, args) => {
+        console.log(`[ToolCall] ${name} args=${JSON.stringify(args || {})}`);
+        const result = await executeGroupManagementTool(name, args, {
+          event,
+          client,
+          cfg,
+          botRole,
+          requesterIsAdmin: isAdmin,
+        });
+        console.log(`[ToolResult] ${name} ${JSON.stringify({
+          ok: result?.ok,
+          action: result?.action,
+          message: result?.message,
+          target_count: result?.target_count,
+          success_count: result?.success_count,
+          failed_count: result?.failed_count,
+          returned_count: result?.returned_count,
+        })}`);
+        return result;
+      },
     });
   } catch (err) {
     console.error('[BotCore] AI 回复失败:', err);

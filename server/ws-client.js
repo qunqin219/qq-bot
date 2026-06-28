@@ -176,6 +176,13 @@ class OneBotWSClient {
     });
   }
 
+  setGroupWholeBan(groupId, enable) {
+    return this.callApi('set_group_whole_ban', {
+      group_id: groupId,
+      enable,
+    });
+  }
+
   setGroupKick(groupId, userId, rejectAddRequest = false) {
     return this.callApi('set_group_kick', {
       group_id: groupId,
