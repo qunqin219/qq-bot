@@ -21,6 +21,26 @@ function extractAtUserIds(msg) {
   return [...new Set(ids)];
 }
 
+function annotateAtMentions(raw, selfId = null) {
+  return String(raw || '').replace(/\[CQ:at,qq=([^,\]]+)[^\]]*\]/g, (_, qq) => {
+    const id = Number(qq);
+    if (selfId && id === Number(selfId)) return '@Bot';
+    return `@QQ=${qq}`;
+  });
+}
+
+function isBotMentionedRaw(raw, selfId) {
+  return Boolean(selfId) && String(raw || '').includes(`[CQ:at,qq=${selfId}]`);
+}
+
+function isOnlyBotMentionMessage(raw, selfId) {
+  if (!isBotMentionedRaw(raw, selfId)) return false;
+  const text = ai.stripCqCodes(raw).trim();
+  const hasMedia = /\[CQ:(image|record|video|file),/.test(String(raw || ''));
+  const atIds = extractAtUserIds(raw);
+  return !text && !hasMedia && atIds.length > 0 && atIds.every((id) => id === Number(selfId));
+}
+
 function formatSender(sender = {}, fallbackUserId = '') {
   return sender.card || sender.nickname || sender.user_id || fallbackUserId || '未知用户';
 }
@@ -87,8 +107,9 @@ function buildGroupReplyMessage(event, cfg, text, aiSelectedMessageId = null) {
   return `[CQ:reply,id=${targetMessageId}]${text}`;
 }
 
-function summarizeRawMessage(raw) {
-  const text = ai.stripCqCodes(raw);
+function summarizeRawMessage(raw, selfId = null) {
+  const annotated = annotateAtMentions(raw, selfId);
+  const text = ai.stripCqCodes(annotated);
   const tags = [];
   if (/\[CQ:image,/.test(String(raw || ''))) tags.push('[图片]');
   if (/\[CQ:record,/.test(String(raw || ''))) tags.push('[语音]');
@@ -423,7 +444,7 @@ async function buildQuotedMessageContext(event, client, cfg) {
   const data = result.data;
   const senderName = formatSender(data.sender || {}, data.user_id);
   const raw = data.raw_message || String(data.message || '');
-  const summary = summarizeRawMessage(raw);
+  const summary = summarizeRawMessage(raw, event.self_id);
   if (cfg.ai_filter_stickers !== false && ai.isStickerMessage(raw)) {
     return '';
   }
@@ -475,8 +496,9 @@ async function buildRecentGroupContext(event, client, cfg) {
     const time = formatTime(m.time);
     const name = m.group_name || m.nickname || String(m.user_id || '未知用户');
     const raw = String(m.raw_message || '');
-    const text = summarizeRawMessage(raw).slice(0, 300);
-    const line = `[${time}] 消息ID=${m.message_id} QQ=${m.user_id} ${name}：${text}`;
+    const text = summarizeRawMessage(raw, event.self_id).slice(0, 300);
+    const directedToBot = isBotMentionedRaw(raw, event.self_id) ? ' 对Bot说' : '';
+    const line = `[${time}] 消息ID=${m.message_id} QQ=${m.user_id} ${name}${directedToBot}：${text}`;
     lines.push(line);
 
     // 普通图片要把原始 CQ 码也带给 ai.js，后者会提取 URL 并转成 Gemini inline_data。
@@ -495,7 +517,7 @@ async function buildRecentGroupContext(event, client, cfg) {
         : '';
       if (quotedRaw && !(cfg.ai_filter_stickers !== false && ai.isStickerMessage(quotedRaw))) {
         const quotedSender = formatSender(result.data?.sender || {}, result.data?.user_id);
-        lines.push(`该消息引用：消息ID=${replyId} ${quotedSender}：${summarizeRawMessage(quotedRaw).slice(0, 300)}`);
+        lines.push(`该消息引用：消息ID=${replyId} ${quotedSender}：${summarizeRawMessage(quotedRaw, event.self_id).slice(0, 300)}`);
         if (/\[CQ:image,/.test(quotedRaw) && !ai.isStickerMessage(quotedRaw)) {
           lines.push(`引用图片原始：${quotedRaw}`);
         }
@@ -507,11 +529,49 @@ async function buildRecentGroupContext(event, client, cfg) {
   return `最近群聊消息：\n${lines.join('\n')}`;
 }
 
+function findRecentUnansweredBotMention(event, cfg) {
+  if (!event.group_id || !event.self_id) return null;
+  const candidates = getMessages(80, null, event.group_id)
+    .filter((m) => m.message_id !== event.message_id)
+    .filter((m) => !(cfg.ai_filter_stickers !== false && ai.isStickerMessage(m.raw_message)))
+    .filter((m) => !isCommandContextMessage(m.raw_message, cfg.command_prefix || '/'));
+
+  let seenBotMessage = false;
+  let fallback = null;
+  for (const m of candidates) {
+    if (m.user_id === event.self_id) {
+      seenBotMessage = true;
+      continue;
+    }
+    const raw = String(m.raw_message || '');
+    if (!isBotMentionedRaw(raw, event.self_id) || isOnlyBotMentionMessage(raw, event.self_id)) continue;
+    if (seenBotMessage) continue;
+    if (m.user_id === event.user_id) return m;
+    if (!fallback) fallback = m;
+  }
+  return fallback;
+}
+
+function buildPendingBotMentionContext(event, cfg) {
+  if (!isOnlyBotMentionMessage(event.raw_message || '', event.self_id)) return '';
+  const pending = findRecentUnansweredBotMention(event, cfg);
+  if (!pending) return '';
+  const time = formatTime(pending.time);
+  const name = pending.group_name || pending.nickname || String(pending.user_id || '未知用户');
+  const raw = String(pending.raw_message || '');
+  const text = summarizeRawMessage(raw, event.self_id).slice(0, 500);
+  const imagePart = /\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw)
+    ? `\n该未回答请求包含图片原始：${raw}`
+    : '';
+  return '当前用户这次只 @ 了 Bot，没有写新问题。请优先判断他是不是在催促你继续处理最近一次未回答的 @Bot 请求：\n' +
+    `[${time}] 消息ID=${pending.message_id} QQ=${pending.user_id} ${name} 对Bot说：${text}${imagePart}`;
+}
+
 async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementContext = null) {
   if (!event.group_id || !cfg.ai_group_context_enabled) return currentMsg;
 
   const sections = [
-    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。不要主动复述上下文；如果上下文不足，再简短追问。最近群聊消息里带有“消息ID=数字”和“QQ=数字”。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
+    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。不要主动复述上下文；如果上下文不足，再简短追问。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
   ];
 
   if (managementContext) {
@@ -537,10 +597,13 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
   const quoted = await buildQuotedMessageContext(event, client, cfg);
   if (quoted) sections.push(quoted);
 
+  const pending = buildPendingBotMentionContext(event, cfg);
+  if (pending) sections.push(pending);
+
   const recent = await buildRecentGroupContext(event, client, cfg);
   if (recent) sections.push(recent);
 
-  sections.push(`当前用户消息：\n${currentMsg}`);
+  sections.push(`当前用户消息：\n${annotateAtMentions(currentMsg, event.self_id)}`);
   return sections.join('\n\n');
 }
 
@@ -612,8 +675,8 @@ async function handleEvent(event, client) {
   // 只有表情包/动画表情时默认不触发 AI，避免把群聊斗图当成问题处理。
   if (cfg.ai_filter_stickers !== false && ai.isStickerMessage(msg) && !ai.stripCqCodes(msg)) return;
 
-  // 去掉 CQ 码，避免污染 AI 上下文。图片本体会在 ai.js 中单独解析并发送给 Gemini。
-  let cleanMsg = ai.stripCqCodes(msg);
+  // 清洗文本用于本地 AI 历史；当前请求仍会把原始 CQ 码交给 ai.js，以便提取图片。
+  let cleanMsg = summarizeRawMessage(msg, event.self_id);
   if (!cleanMsg) cleanMsg = /\[CQ:image,/.test(msg) ? '[图片]' : '你好';
 
   const conversationKey = conversationStore.getConversationKey(event);
