@@ -144,9 +144,24 @@ async function getMemberRole(client, groupId, userId) {
   return result?.status === 'ok' ? (result.data?.role || 'unknown') : 'unknown';
 }
 
-function buildGroupManagementFunctionDeclarations(enabled) {
-  if (!enabled) return [];
-  return [
+function buildGroupManagementFunctionDeclarations(options = {}) {
+  const declarations = [];
+  if (options.memberListEnabled) {
+    declarations.push({
+      name: 'qq_get_group_members',
+      description: '获取当前 QQ 群所有群成员的 QQ 号、昵称、群名片和身份。用于查找用户提到的成员，或回答当前群成员列表相关问题。',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: { type: 'string', description: '可选。按昵称、群名片或 QQ 号过滤成员；不填则返回当前群全部成员' },
+        },
+      },
+    });
+  }
+
+  if (!options.managementEnabled) return declarations;
+
+  declarations.push(
     {
       name: 'qq_mute_member',
       description: '禁言当前 QQ 群中的某个成员。只在 bot 是管理员或群主，且触发者有权限时可执行。',
@@ -184,8 +199,10 @@ function buildGroupManagementFunctionDeclarations(enabled) {
         },
         required: ['target_user_id'],
       },
-    },
-  ];
+    }
+  );
+
+  return declarations;
 }
 
 async function executeGroupManagementTool(name, args, context) {
@@ -198,7 +215,44 @@ async function executeGroupManagementTool(name, args, context) {
   }
 
   if (!groupId) return deny('这个工具只能在群聊里用');
-  if (!requesterIsAdmin) return deny('你没有权限让我执行群管理操作');
+  if (!requesterIsAdmin) return deny('你没有权限让我读取群成员列表或执行群管理操作');
+
+  if (name === 'qq_get_group_members') {
+    if (!client?.getGroupMemberList) return deny('当前 OneBot 客户端不支持读取群成员列表');
+    const result = await client.getGroupMemberList(groupId);
+    if (result?.status !== 'ok' || !Array.isArray(result.data)) {
+      return deny(`获取群成员列表失败：${result?.wording || result?.msg || '未知错误'}`);
+    }
+    const keyword = String(args?.keyword || '').trim().toLowerCase();
+    const members = result.data
+      .map((m) => ({
+        user_id: Number(m.user_id),
+        nickname: m.nickname || '',
+        card: m.card || '',
+        display_name: m.card || m.nickname || String(m.user_id),
+        role: m.role || 'unknown',
+        title: m.title || '',
+      }))
+      .filter((m) => !keyword || [
+        String(m.user_id),
+        m.nickname,
+        m.card,
+        m.display_name,
+        m.title,
+      ].some((value) => String(value || '').toLowerCase().includes(keyword)));
+    return {
+      ok: true,
+      action: 'get_group_members',
+      group_id: groupId,
+      total_count: result.data.length,
+      returned_count: members.length,
+      members,
+      message: keyword
+        ? `找到 ${members.length} 个匹配成员`
+        : `当前群共有 ${result.data.length} 个成员`,
+    };
+  }
+
   if (!['owner', 'admin'].includes(botRole)) {
     return deny(`我在这个群只是${roleLabel(botRole)}，没有群管理权限`);
   }
@@ -359,7 +413,9 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
       `${managementContext.requesterIsAdmin ? '是' : '不是'} bot 配置管理员。` +
       `我在本群的身份是${roleLabel(managementContext.botRole)}。` +
       `群管理工具${managementContext.toolsEnabled ? '可用' : '不可用'}。` +
-      '只有用户明确要求禁言、解除禁言、踢出成员等群管理动作时才调用工具；不要因为普通争吵或玩笑自动管理。' +
+      `群成员列表工具${managementContext.memberListEnabled ? '可用' : '不可用'}。` +
+      '如果需要通过昵称、群名片或模糊称呼查 QQ 号，可以调用 qq_get_group_members；需要全部成员时不传 keyword，需要筛选时传 keyword。' +
+      '只有用户明确要求禁言、解除禁言、踢出成员等群管理动作时才调用管理工具；不要因为普通争吵或玩笑自动管理。' +
       '如果当前消息额外 @ 了某个群成员，并且管理员要求禁言/解禁/踢出/封禁，优先把这个被 @ 的 QQ 作为 target_user_id。' +
       '调用工具时必须使用上下文里明确给出的 QQ 号作为 target_user_id，不要猜 QQ 号。'
     );
@@ -464,12 +520,21 @@ async function handleEvent(event, client) {
     isAdmin &&
     ['owner', 'admin'].includes(botRole)
   );
+  const memberListToolsEnabled = Boolean(groupId && isAdmin);
   const managementContext = groupId
-    ? { botRole, toolsEnabled: managementToolsEnabled, requesterIsAdmin: isAdmin }
+    ? {
+      botRole,
+      toolsEnabled: managementToolsEnabled,
+      memberListEnabled: memberListToolsEnabled,
+      requesterIsAdmin: isAdmin,
+    }
     : null;
 
   const aiInput = await buildGroupAwarePrompt(event, client, cfg, msg, managementContext);
-  const functionDeclarations = buildGroupManagementFunctionDeclarations(managementToolsEnabled);
+  const functionDeclarations = buildGroupManagementFunctionDeclarations({
+    memberListEnabled: memberListToolsEnabled,
+    managementEnabled: managementToolsEnabled,
+  });
 
   let aiReply;
   try {
