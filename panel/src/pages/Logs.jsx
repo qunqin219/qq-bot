@@ -32,6 +32,7 @@ export default function Logs() {
   const [limit, setLimit] = useState(300)
   const [query, setQuery] = useState('')
   const [autoRefresh, setAutoRefresh] = useState(false)
+  const [newestFirst, setNewestFirst] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const { success, error: toastError, ToastEl } = useToast()
@@ -63,7 +64,12 @@ export default function Logs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh, limit, query])
 
-  const logText = useMemo(() => (data.lines || []).join('\n'), [data.lines])
+  const visibleLines = useMemo(() => {
+    const lines = data.lines || []
+    return newestFirst ? [...lines].reverse() : lines
+  }, [data.lines, newestFirst])
+
+  const logText = useMemo(() => visibleLines.join('\n'), [visibleLines])
 
   const copyLogs = async () => {
     try {
@@ -91,6 +97,13 @@ export default function Logs() {
         subtitle={`server.log · ${data.total || 0} 行${data.modified_at ? ` · 更新于 ${new Date(data.modified_at).toLocaleString('zh-CN')}` : ''}`}
         action={
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setNewestFirst((v) => !v)}
+              className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-slate-600"
+            >
+              {newestFirst ? '↓ 最新在上' : '↑ 最旧在上'}
+            </button>
             <button
               type="button"
               onClick={() => setAutoRefresh((v) => !v)}
@@ -182,13 +195,13 @@ export default function Logs() {
       {error && <div className="mb-4"><ErrorBox message={error} onRetry={fetchData} /></div>}
 
       <Card className="p-0">
-        {!data.lines?.length ? (
+        {!visibleLines.length ? (
           <p className="py-12 text-center text-sm text-slate-500">
             没有匹配日志
           </p>
         ) : (
           <div className="max-h-[68vh] overflow-auto p-3 font-mono text-xs leading-relaxed">
-            {data.lines.map((line, idx) => (
+            {visibleLines.map((line, idx) => (
               <div
                 key={`${idx}-${line.slice(0, 30)}`}
                 className={`mb-1 whitespace-pre-wrap break-words rounded border px-3 py-2 ${levelClass(line)}`}
