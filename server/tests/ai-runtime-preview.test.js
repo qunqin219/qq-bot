@@ -107,3 +107,20 @@ test('runtime preview shows current @ text outranks an attached backend-log scre
     assert.equal(last.parts[1].inline_data.mime_type, 'image/png');
   });
 });
+
+test('group runtime uses tool access for AI conversation history instead of direct role history', async () => {
+  const preview = await botCore.buildAiRuntimePreview({
+    event: makeGroupEvent('[CQ:at,qq=1525899506] 继续你刚刚说的'),
+    client: makeClient(),
+    cfg: makeConfig({ ai_context_enabled: true }),
+  });
+
+  assert.equal(preview.conversationKey, 'group:424242424');
+  assert.deepEqual(preview.history, [], 'group chats should not inject conversations.json as Gemini role history');
+  assert.equal(preview.requestBody.contents.length, 1, 'request body should only contain current grouped prompt');
+
+  const declarations = (preview.requestBody.tools || []).flatMap((tool) => tool.functionDeclarations || []);
+  const names = declarations.map((item) => item.name);
+  assert.ok(names.includes('qq_get_ai_conversation_history'));
+  assert.match(preview.aiInput, /qq_get_ai_conversation_history/);
+});

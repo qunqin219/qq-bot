@@ -59,17 +59,62 @@ function getHistory(key, limit = 20) {
     .map((m) => ({ role: m.role, text: m.text, time: m.time }));
 }
 
+function stripLegacyUserPrefix(text) {
+  const value = String(text || '');
+  const match = value.match(/^(.{1,80}?) 问：([\s\S]*)$/);
+  return match ? { speaker_name: match[1], text: match[2] } : { speaker_name: null, text: value };
+}
+
+function stripLegacyModelPrefix(text) {
+  const value = String(text || '');
+  const match = value.match(/^Bot 回复 (.{1,80}?)：([\s\S]*)$/);
+  return match ? { target_name: match[1], text: match[2] } : { target_name: null, text: value };
+}
+
+function getRecentTurns(key, limit = 8) {
+  if (!key) return [];
+  const data = readStore();
+  const messages = Array.isArray(data[key]?.messages) ? data[key].messages : [];
+  const turns = [];
+  let pendingUser = null;
+  for (const message of messages) {
+    if (!message || typeof message.text !== 'string') continue;
+    if (message.role === 'user') {
+      pendingUser = message;
+      continue;
+    }
+    if (message.role === 'model' && pendingUser) {
+      const user = stripLegacyUserPrefix(pendingUser.text);
+      const assistant = stripLegacyModelPrefix(message.text);
+      turns.push({
+        time: message.time || pendingUser.time || null,
+        user_id: pendingUser.user_id || null,
+        user_name: pendingUser.user_name || pendingUser.speaker_name || user.speaker_name || null,
+        user_text: user.text,
+        assistant_text: assistant.text,
+      });
+      pendingUser = null;
+    }
+  }
+  const safeLimit = Math.max(1, Math.min(20, Number(limit) || 8));
+  return turns.slice(-safeLimit);
+}
+
 /**
  * 追加一轮用户/模型对话，并限制每个会话最多 maxTurns * 2 条消息。
  */
-function appendTurn(key, userText, assistantText, maxTurns = 20) {
+function appendTurn(key, userText, assistantText, maxTurns = 20, meta = {}) {
   if (!key || !userText || !assistantText) return false;
   const data = readStore();
   const now = new Date().toISOString();
   const entry = data[key] || { updated_at: now, messages: [] };
   const messages = Array.isArray(entry.messages) ? entry.messages : [];
-  messages.push({ role: 'user', text: String(userText), time: now });
-  messages.push({ role: 'model', text: String(assistantText), time: now });
+  const userEntry = { role: 'user', text: String(userText), time: now };
+  const modelEntry = { role: 'model', text: String(assistantText), time: now };
+  if (meta.user_id) userEntry.user_id = meta.user_id;
+  if (meta.user_name) userEntry.user_name = meta.user_name;
+  messages.push(userEntry);
+  messages.push(modelEntry);
 
   const turns = Math.max(1, Number(maxTurns) || 20);
   entry.messages = messages.slice(-(turns * 2));
@@ -117,6 +162,7 @@ function listHistories() {
 module.exports = {
   getConversationKey,
   getHistory,
+  getRecentTurns,
   appendTurn,
   clearHistory,
   clearAllHistories,

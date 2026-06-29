@@ -262,6 +262,18 @@ function buildGroupManagementFunctionDeclarations(options = {}) {
       }
     );
   }
+  if (options.conversationHistoryEnabled) {
+    declarations.push({
+      name: 'qq_get_ai_conversation_history',
+      description: '读取当前 QQ 会话里最近几轮用户与 Bot 的 AI 对话历史，结构化返回 user_text 和 assistant_text。用于用户追问“你刚刚说的/你上次回答/继续刚才/你前面为什么这么说”等需要知道 Bot 自己之前回复的场景。只读取当前群或当前私聊，不跨会话。',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', description: '最多返回多少轮，默认 6，最多 20' },
+        },
+      },
+    });
+  }
   if (options.searchEnabled) {
     declarations.push({
       name: 'qq_search_chat_history',
@@ -437,6 +449,24 @@ async function executeGroupManagementTool(name, args, context) {
   if (name === 'create_memory' || name === 'edit_memory' || name === 'delete_memory') {
     const conversationKey = conversationStore.getConversationKey(event);
     return executeMemoryTool(name, args, conversationKey, cfg);
+  }
+
+  if (name === 'qq_get_ai_conversation_history') {
+    const conversationKey = conversationStore.getConversationKey(event);
+    const turns = conversationStore.getRecentTurns(
+      conversationKey,
+      Math.max(1, Math.min(20, Number(args?.limit || 6)))
+    );
+    return {
+      ok: true,
+      action: 'get_ai_conversation_history',
+      conversation_key: conversationKey,
+      returned_count: turns.length,
+      turns,
+      message: turns.length > 0
+        ? `找到 ${turns.length} 轮 AI 对话历史`
+        : '当前会话还没有 AI 对话历史',
+    };
   }
 
   if (name === 'qq_search_chat_history') {
@@ -728,7 +758,7 @@ function buildPendingBotMentionContext(event, cfg) {
   const pending = findRecentUnansweredBotMention(event, cfg);
   if (!pending) return '';
   const time = formatTime(pending.time);
-  const name = pending.group_name || pending.nickname || String(pending.user_id || '未知用户');
+  const name = pending.nickname || String(pending.user_id || '未知用户');
   const raw = String(pending.raw_message || '');
   const text = summarizeRawMessage(raw, event.self_id).slice(0, 500);
   const imagePart = /\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw)
@@ -742,7 +772,7 @@ async function buildGroupAwarePrompt(event, client, cfg, currentMsg, managementC
   if (!event.group_id || !cfg.ai_group_context_enabled) return currentMsg;
 
   const sections = [
-    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。当前用户这次明确输入的文字指令优先级最高；同条消息里的图片、引用消息和最近群聊上下文只作为辅助材料。除非用户明确说“看图/图里/截图/这张图/识别图片/日志怎么了”等，否则不要因为同条消息里的图片内容而偏离当前文字指令。不要主动复述上下文；如果上下文不足，不要硬猜，先判断缺的是什么。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。如果缺的是群内前情、梗、代称、某人之前说过什么、某话题在本群怎么聊过、这句话接的是哪条上文，使用持久化聊天记录检索工具 qq_search_chat_history；它支持关键词、发言人QQ和时间范围过滤，query 可以为空；提到“我/我的发言”时用当前触发用户 QQ 作为 user_id。如果缺的是外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格/版本/状态等实时信息，并且联网工具可用，可以使用联网搜索或 URL 上下文。普通闲聊、能从当前消息和近期上下文直接回答的问题，不要为了显得认真而检索或联网。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
+    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。当前用户这次明确输入的文字指令优先级最高；同条消息里的图片、引用消息和最近群聊上下文只作为辅助材料。除非用户明确说“看图/图里/截图/这张图/识别图片/日志怎么了”等，否则不要因为同条消息里的图片内容而偏离当前文字指令。不要主动复述上下文；如果上下文不足，不要硬猜，先判断缺的是什么。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。如果缺的是你自己之前在当前会话回复过什么、用户让你继续上一次 AI 对话或追问“你刚刚说的”，使用 AI 对话历史工具 qq_get_ai_conversation_history。如果缺的是群内前情、梗、代称、某人之前说过什么、某话题在本群怎么聊过、这句话接的是哪条上文，使用持久化聊天记录检索工具 qq_search_chat_history；它支持关键词、发言人QQ和时间范围过滤，query 可以为空；提到“我/我的发言”时用当前触发用户 QQ 作为 user_id。如果缺的是外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格/版本/状态等实时信息，并且联网工具可用，可以使用联网搜索或 URL 上下文。普通闲聊、能从当前消息和近期上下文直接回答的问题，不要为了显得认真而检索或联网。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
   ];
 
   if (managementContext) {
@@ -793,7 +823,7 @@ async function buildAiRuntimePreview({ event, client, cfg }) {
   const isAdmin = admins.includes(userId);
   const conversationKey = conversationStore.getConversationKey(event);
   const contextTurns = Math.max(1, Number(runtimeCfg.ai_context_turns || 10));
-  const history = runtimeCfg.ai_context_enabled
+  const history = runtimeCfg.ai_context_enabled && !groupId
     ? conversationStore.getHistory(conversationKey, contextTurns * 2)
     : [];
 
@@ -818,6 +848,7 @@ async function buildAiRuntimePreview({ event, client, cfg }) {
   const aiInput = await buildGroupAwarePrompt(event, client, runtimeCfg, msg, managementContext);
   const functionDeclarations = buildGroupManagementFunctionDeclarations({
     memoryEnabled: runtimeCfg.ai_memory_enabled === true,
+    conversationHistoryEnabled: runtimeCfg.ai_context_enabled === true,
     searchEnabled: true,
     memberListEnabled: memberListToolsEnabled,
     managementEnabled: managementToolsEnabled,
@@ -980,13 +1011,12 @@ async function handleEvent(event, client) {
   aiReply = parsedReply.text;
   if (!aiReply) return;
 
-  const historyUserText = groupId
-    ? `${getEventSenderName(event)} 问：${cleanMsg}`
-    : cleanMsg;
-  const historyAssistantText = groupId
-    ? `Bot 回复 ${getEventSenderName(event)}：${aiReply}`
-    : aiReply;
-  conversationStore.appendTurn(conversationKey, historyUserText, historyAssistantText, contextTurns);
+  const historyUserText = cleanMsg;
+  const historyAssistantText = aiReply;
+  conversationStore.appendTurn(conversationKey, historyUserText, historyAssistantText, contextTurns, groupId ? {
+    user_id: userId,
+    user_name: getEventSenderName(event),
+  } : {});
 
   if (groupId) {
     await client.sendGroupMsg(groupId, buildGroupReplyMessage(event, cfg, aiReply, parsedReply.replyMessageId));
