@@ -16,6 +16,9 @@ const imageCache = require('./image-cache');
 
 const MAX_IMAGES_PER_MESSAGE = 3;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_TOOL_ROUNDS = 4;
+const DEFAULT_MAX_TOOL_CALLS = 8;
+const DEFAULT_MAX_FUNCTION_CALLS_PER_ROUND = 3;
 
 function getBeijingTimeText() {
   const now = new Date();
@@ -236,6 +239,23 @@ function extractOutputText(data) {
     .trim();
 }
 
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+}
+
+function toolCallKey(call) {
+  return `${call.name}:${stableStringify(call.args || {})}`;
+}
+
+function fallbackToolMessages(toolResults) {
+  return toolResults
+    .map((item) => item.response?.message)
+    .filter(Boolean)
+    .join('\n') || null;
+}
+
 async function buildRequestBody(userMessage, history, cfg, options = {}) {
   const systemPrompt = cfg?.ai_system_prompt || '';
   const body = {
@@ -270,6 +290,20 @@ async function buildRequestBody(userMessage, history, cfg, options = {}) {
   return body;
 }
 
+function resolveNumber(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+async function postGenerateContent(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 /**
  * 调用 Gemini generateContent 生成 AI 回复。
  *
@@ -288,81 +322,96 @@ async function chat(userMessage, history, cfg, options = {}) {
     .replace(/\/+$/, '');
   const model = cfg.ai_model || 'gemini-3.5-flash';
   const apiKey = String(cfg.ai_api_key || '').trim();
-
   const url = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const maxToolRounds = resolveNumber(options.maxToolRounds, DEFAULT_MAX_TOOL_ROUNDS, 1, 8);
+  const maxToolCalls = resolveNumber(options.maxToolCalls, DEFAULT_MAX_TOOL_CALLS, 1, 20);
+  const maxCallsPerRound = resolveNumber(
+    options.maxCallsPerRound,
+    DEFAULT_MAX_FUNCTION_CALLS_PER_ROUND,
+    1,
+    5
+  );
+
   const body = await buildRequestBody(userMessage, history, cfg, options);
+  const seenToolCalls = new Set();
+  const allToolResults = [];
+  let executedToolCalls = 0;
 
   try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => '');
-      console.error(
-        `[AI] Gemini generateContent 返回错误 ${resp.status}: ${errText.slice(0, 500)}`
-      );
-      return null;
-    }
-
-    const data = await resp.json();
-    const functionCalls = extractFunctionCalls(data);
-    if (functionCalls.length > 0 && typeof options.executeFunctionCall === 'function') {
-      const toolResults = [];
-      for (const call of functionCalls.slice(0, 3)) {
-        const response = await options.executeFunctionCall(call.name, call.args || {});
-        toolResults.push({ name: call.name, response });
-      }
-
-      const followUpBody = {
-        ...body,
-        contents: [
-          ...body.contents,
-          data.candidates[0].content,
-          {
-            role: 'user',
-            parts: buildFunctionResponseParts(toolResults),
-          },
-        ],
-      };
-
-      const followUpResp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(followUpBody),
-      });
-      if (!followUpResp.ok) {
-        const errText = await followUpResp.text().catch(() => '');
+    for (let round = 1; round <= maxToolRounds + 1; round += 1) {
+      const resp = await postGenerateContent(url, body);
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
         console.error(
-          `[AI] Gemini 工具结果二次生成错误 ${followUpResp.status}: ${errText.slice(0, 500)}`
+          `[AI] Gemini generateContent 第${round}轮返回错误 ${resp.status}: ${errText.slice(0, 500)}`
         );
-        return toolResults
-          .map((item) => item.response?.message)
-          .filter(Boolean)
-          .join('\n') || null;
+        return fallbackToolMessages(allToolResults);
       }
-      const followUpData = await followUpResp.json();
-      const followUpReply = extractOutputText(followUpData);
-      if (followUpReply) return followUpReply;
 
-      return toolResults
-        .map((item) => item.response?.message)
-        .filter(Boolean)
-        .join('\n') || null;
+      const data = await resp.json();
+      const functionCalls = extractFunctionCalls(data);
+      const reply = extractOutputText(data);
+      if (functionCalls.length === 0 || typeof options.executeFunctionCall !== 'function') {
+        if (reply) return reply;
+        console.warn('[AI] Gemini 返回空回复:', JSON.stringify(data).slice(0, 500));
+        return fallbackToolMessages(allToolResults);
+      }
+
+      if (round > maxToolRounds || executedToolCalls >= maxToolCalls) {
+        console.warn(`[AI] 工具调用达到限制 round=${round} executed=${executedToolCalls}`);
+        return reply || fallbackToolMessages(allToolResults);
+      }
+
+      const roundToolResults = [];
+      const remainingCalls = Math.max(0, maxToolCalls - executedToolCalls);
+      const callsToRun = functionCalls.slice(0, Math.min(maxCallsPerRound, remainingCalls));
+
+      for (const [index, call] of callsToRun.entries()) {
+        const key = toolCallKey(call);
+        if (seenToolCalls.has(key)) {
+          roundToolResults.push({
+            name: call.name,
+            response: {
+              ok: false,
+              duplicate: true,
+              message: '重复工具调用已跳过，请根据已有工具结果回答，不要重复调用同名同参数工具',
+            },
+          });
+          continue;
+        }
+
+        seenToolCalls.add(key);
+        executedToolCalls += 1;
+        const response = await options.executeFunctionCall(call.name, call.args || {}, {
+          round,
+          index: index + 1,
+          executedToolCalls,
+        });
+        const item = { name: call.name, response };
+        roundToolResults.push(item);
+        allToolResults.push(item);
+      }
+
+      if (roundToolResults.length === 0) {
+        console.warn('[AI] 模型请求工具但没有可执行调用，停止工具循环');
+        return reply || fallbackToolMessages(allToolResults);
+      }
+
+      body.contents = [
+        ...body.contents,
+        data.candidates[0].content,
+        {
+          role: 'user',
+          parts: buildFunctionResponseParts(roundToolResults),
+        },
+      ];
     }
 
-    const reply = extractOutputText(data);
-    if (!reply) {
-      console.warn('[AI] Gemini 返回空回复:', JSON.stringify(data).slice(0, 500));
-      return null;
-    }
-
-    return reply;
+    return fallbackToolMessages(allToolResults);
   } catch (e) {
     console.error('[AI] 调用 Gemini generateContent 异常:', e.message);
-    return null;
+    return fallbackToolMessages(allToolResults);
   }
 }
 

@@ -944,8 +944,9 @@ async function handleEvent(event, client) {
     aiReply = await ai.chat(aiInput, runtime.history, cfg, {
       functionDeclarations,
       extraSystemInstruction,
-      executeFunctionCall: async (name, args) => {
-        console.log(`[ToolCall] ${name} args=${JSON.stringify(args || {})}`);
+      executeFunctionCall: async (name, args, meta = {}) => {
+        const roundLabel = meta.round ? ` round=${meta.round}` : '';
+        console.log(`[ToolCall]${roundLabel} ${name} args=${JSON.stringify(args || {})}`);
         const result = await executeGroupManagementTool(name, args, {
           event,
           client,
@@ -953,7 +954,7 @@ async function handleEvent(event, client) {
           botRole,
           requesterIsAdmin: isAdmin,
         });
-        console.log(`[ToolResult] ${name} ${JSON.stringify({
+        console.log(`[ToolResult]${roundLabel} ${name} ${JSON.stringify({
           ok: result?.ok,
           action: result?.action,
           message: result?.message,
