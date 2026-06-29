@@ -8,11 +8,15 @@ const CONFIG_FILE = path.join(__dirname, '..', 'config.json');
 
 // 默认配置
 const DEFAULT_CONFIG = {
-  admins: [3605900361],                  // 默认管理员 QQ（用户本人）
+  admins: [],                            // 管理员 QQ 列表；生产环境写入本地 config.json
   command_prefix: '/',                    // 命令前缀
   napcat_ws: 'ws://127.0.0.1:3001',       // NapCat WebSocket 地址
   active_groups: [],                      // 群白名单，为空表示所有群都回复
   group_filter_enabled: false,            // 是否启用群过滤
+  // ── 面板登录配置（不要提交真实密码；生产环境写入 config.json 或环境变量） ──
+  panel_username: 'admin',
+  panel_password: '',
+  session_secret: '',
   // ── AI 回复配置（Gemini API） ─────────────────────
   ai_enabled: false,                      // 是否启用 AI 回复
   ai_base_url: 'https://generativelanguage.googleapis.com/v1beta', // Gemini API 基础地址

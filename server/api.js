@@ -2,6 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const session = require('express-session');
 const cors = require('cors');
@@ -34,9 +35,16 @@ function readTailLines(filePath, lineLimit = 300, maxBytes = 512 * 1024) {
 }
 
 // ── 认证配置 ──────────────────────────────────────────────
-const ADMIN_USERNAME = 'qunqin';
-const ADMIN_PASSWORD = 'CHANGE_ME_PANEL_PASSWORD';
-const SESSION_SECRET_KEY = 'CHANGE_ME_SESSION_SECRET';
+const FALLBACK_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+
+function getPanelAuthConfig() {
+  const cfg = loadConfig();
+  return {
+    username: process.env.QQ_BOT_PANEL_USERNAME || cfg.panel_username || 'admin',
+    password: process.env.QQ_BOT_PANEL_PASSWORD || cfg.panel_password || '',
+    sessionSecret: process.env.QQ_BOT_SESSION_SECRET || cfg.session_secret || FALLBACK_SESSION_SECRET,
+  };
+}
 
 function isValidHttpUrl(value) {
   try {
@@ -76,7 +84,7 @@ function setupApp(client) {
   );
   app.use(
     session({
-      secret: SESSION_SECRET_KEY,
+      secret: getPanelAuthConfig().sessionSecret,
       resave: false,
       saveUninitialized: false,
       cookie: {
@@ -98,7 +106,11 @@ function setupApp(client) {
   // ── 认证端点 ────────────────────────────────────────
   app.post('/api/login', (req, res) => {
     const { username, password } = req.body || {};
-    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    const auth = getPanelAuthConfig();
+    if (!auth.password) {
+      return res.status(503).json({ detail: '面板密码未配置' });
+    }
+    if (username === auth.username && password === auth.password) {
       req.session.user = username;
       return res.json({ ok: true, user: username });
     }
@@ -193,7 +205,8 @@ function setupApp(client) {
     if (update.ai_base_url !== undefined && !isValidHttpUrl(update.ai_base_url)) {
       return res.status(400).json({ detail: 'AI Base URL 必须是完整的 http(s) 地址，疑似被浏览器自动填充污染，已拒绝保存' });
     }
-    if (update.ai_api_key !== undefined && String(update.ai_api_key || '') === ADMIN_PASSWORD) {
+    const panelPassword = getPanelAuthConfig().password;
+    if (update.ai_api_key !== undefined && panelPassword && String(update.ai_api_key || '') === panelPassword) {
       return res.status(400).json({ detail: 'API Key 疑似被浏览器自动填充成面板密码，已拒绝保存' });
     }
     Object.assign(cfg, update);
