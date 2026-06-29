@@ -3,7 +3,6 @@ node_modules/
 .pnpm-store/
 
 # build outputs
-panel/dist/
 dist/
 build/
 
@@ -15,7 +14,7 @@ qq-bot.pid
 messages.json
 conversations.json
 memories.json
-data/images/
+data/
 
 # local config / secrets
 config.json
