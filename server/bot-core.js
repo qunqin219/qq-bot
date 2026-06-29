@@ -3,6 +3,7 @@
 const { loadConfig } = require('./config');
 const { addMessage, getMessages, searchMessages } = require('./message-store');
 const ai = require('./ai');
+const imageCache = require('./image-cache');
 const conversationStore = require('./conversation-store');
 const memoryStore = require('./memory-store');
 
@@ -866,6 +867,20 @@ async function handleEvent(event, client) {
 
   // 存储消息（供面板查看）
   addMessage(event);
+
+  // QQ 图片 URL 带临时 rkey，过期后无法下载；收到消息时先后台缓存普通图片。
+  if (/\[CQ:image,/.test(msg)) {
+    imageCache.cacheImagesFromMessage(msg, {
+      message_id: event.message_id,
+      group_id: event.group_id || null,
+      user_id: event.user_id || null,
+      message_type: event.message_type || null,
+    }, {
+      ignoreStickers: cfg.ai_filter_stickers !== false,
+    }).catch((e) => {
+      console.warn('[ImageCache] 后台缓存任务异常:', e.message);
+    });
+  }
 
   // 忽略自身消息
   if (userId === event.self_id) return;

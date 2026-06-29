@@ -11,6 +11,9 @@
 // - URL Context：tools: [{ urlContext: {} }]
 // - 识图：解析 QQ [CQ:image,...url=...]，下载后作为 inline_data 发给 Gemini
 
+const fs = require('fs');
+const imageCache = require('./image-cache');
+
 const MAX_IMAGES_PER_MESSAGE = 3;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
@@ -50,18 +53,6 @@ function decodeHtmlEntities(text) {
     .replace(/&quot;/g, '"');
 }
 
-function parseCqParams(body) {
-  const params = {};
-  for (const item of String(body || '').split(',')) {
-    const idx = item.indexOf('=');
-    if (idx === -1) continue;
-    const key = item.slice(0, idx).trim();
-    const value = item.slice(idx + 1).trim();
-    params[key] = decodeHtmlEntities(value);
-  }
-  return params;
-}
-
 function isStickerMessage(message) {
   const raw = decodeHtmlEntities(String(message || ''));
   return (
@@ -71,18 +62,10 @@ function isStickerMessage(message) {
 }
 
 function extractImageUrls(message, options = {}) {
-  if (options.ignoreStickers && isStickerMessage(message)) return [];
-  const urls = [];
-  const raw = String(message || '');
-  const re = /\[CQ:image,([^\]]+)\]/g;
-  let match;
-  while ((match = re.exec(raw)) !== null) {
-    const params = parseCqParams(match[1]);
-    if (params.url && /^https?:\/\//i.test(params.url)) {
-      urls.push(params.url);
-    }
-  }
-  return [...new Set(urls)].slice(0, MAX_IMAGES_PER_MESSAGE);
+  return imageCache.extractImageRecords(message, options)
+    .map((record) => record.url)
+    .filter(Boolean)
+    .slice(0, MAX_IMAGES_PER_MESSAGE);
 }
 
 function stripCqCodes(message) {
@@ -98,10 +81,19 @@ async function imageUrlToPart(url) {
       headers: {
         // QQ 图片 CDN 有时会拒绝空 UA。
         'User-Agent': 'Mozilla/5.0 QQBot/1.0',
+        Referer: 'https://im.qq.com/',
       },
     });
     if (!resp.ok) {
-      console.warn(`[AI] 图片下载失败 ${resp.status}: ${url.slice(0, 160)}`);
+      const errText = await resp.text().catch(() => '');
+      let errSummary = errText.slice(0, 160);
+      try {
+        const data = JSON.parse(errText);
+        errSummary = data.retmsg || data.message || errSummary;
+      } catch {
+        // ignore non-json error body
+      }
+      console.warn(`[AI] 图片下载失败 ${resp.status}: ${errSummary}`);
       return null;
     }
 
@@ -132,13 +124,48 @@ async function imageUrlToPart(url) {
   }
 }
 
+function cachedImageToPart(entry) {
+  if (!entry?.file_path || !fs.existsSync(entry.file_path)) return null;
+  const buf = fs.readFileSync(entry.file_path);
+  if (buf.length > MAX_IMAGE_BYTES) {
+    console.warn(`[AI] 缓存图片过大，已跳过: ${buf.length} bytes`);
+    return null;
+  }
+  return {
+    inline_data: {
+      mime_type: entry.mime_type || 'image/jpeg',
+      data: buf.toString('base64'),
+    },
+  };
+}
+
+async function imageRecordToPart(record) {
+  const cached = imageCache.getCachedImage(record);
+  if (cached) {
+    const part = cachedImageToPart(cached);
+    if (part) return part;
+  }
+
+  // 当前消息里的 QQ URL 通常还没过期；这里顺手缓存，之后引用旧图就不依赖临时链接。
+  const cachedNow = await imageCache.cacheImageRecord(record, { source: 'ai' });
+  if (cachedNow) {
+    const part = cachedImageToPart(cachedNow);
+    if (part) return part;
+  }
+
+  return record.url ? imageUrlToPart(record.url) : null;
+}
+
 async function buildCurrentUserParts(userMessage, cfg = {}) {
-  const imageUrls = extractImageUrls(userMessage, { ignoreStickers: cfg.ai_filter_stickers !== false });
-  const text = stripCqCodes(userMessage) || (imageUrls.length ? '请分析这张图片。' : String(userMessage || ''));
+  const imageRecords = imageCache.extractImageRecords(userMessage, {
+    ignoreStickers: cfg.ai_filter_stickers !== false,
+    maxImages: MAX_IMAGES_PER_MESSAGE,
+  });
+  const text = stripCqCodes(userMessage) || (imageRecords.length ? '请分析这张图片。' : String(userMessage || ''));
   const parts = [{ text }];
 
-  for (const url of imageUrls) {
-    const part = await imageUrlToPart(url);
+  for (const record of imageRecords) {
+    const part = await imageRecordToPart(record);
     if (part) parts.push(part);
   }
 

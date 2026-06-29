@@ -15,6 +15,7 @@ qq-bot.pid
 messages.json
 conversations.json
 memories.json
+data/images/
 
 # local config / secrets
 config.json
