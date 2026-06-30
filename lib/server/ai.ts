@@ -81,6 +81,7 @@ type GeminiResponse = {
 type HistoryItem = {
   role: Role;
   text: string;
+  gemini_content?: GeminiContent;
 };
 
 type AiConfig = Record<string, any>;
@@ -104,6 +105,7 @@ type ChatOptions = {
   maxHttpRetries?: number;
   httpRetryBaseDelayMs?: number;
   autoAttachImages?: boolean;
+  onFinalTurn?: (_turn: { userContent: GeminiContent; modelContent: GeminiContent; reply: string }) => void;
 };
 
 function errorMessage(error: unknown): string {
@@ -251,10 +253,14 @@ async function buildContents(
   const safeHistory = Array.isArray(history) ? history : [];
   const contents = safeHistory
     .filter((m): m is HistoryItem => Boolean(m && (m.role === 'user' || m.role === 'model') && m.text))
-    .map((m): GeminiContent => ({
-      role: m.role,
-      parts: [{ text: String(m.text) }],
-    }));
+    .map((m): GeminiContent => {
+      const nativeContent = normalizeGeminiContentForRequest((m as any).gemini_content);
+      if (nativeContent && nativeContent.role === m.role) return nativeContent;
+      return {
+        role: m.role,
+        parts: [{ text: String(m.text) }],
+      };
+    });
 
   contents.push({
     role: 'user',
@@ -262,6 +268,31 @@ async function buildContents(
   });
 
   return contents;
+}
+
+function cloneJson<T>(value: T): T | null {
+  try {
+    return JSON.parse(JSON.stringify(value)) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isGeminiContent(value: unknown): value is GeminiContent {
+  const content = value as GeminiContent;
+  return Boolean(
+    content &&
+    (content.role === 'user' || content.role === 'model') &&
+    Array.isArray(content.parts) &&
+    content.parts.length > 0
+  );
+}
+
+function normalizeGeminiContentForRequest(value: unknown): GeminiContent | null {
+  if (!isGeminiContent(value)) return null;
+  const cloned = cloneJson(value);
+  if (!isGeminiContent(cloned)) return null;
+  return cloned;
 }
 
 function thinkingBudgetFromLevel(level: unknown): number {
@@ -326,10 +357,40 @@ function buildFunctionResponseParts(results: ToolResult[]): ContentPart[] {
 function extractOutputText(data: GeminiResponse): string {
   const parts = data?.candidates?.[0]?.content?.parts || [];
   return parts
-    .filter((part): part is TextPart => typeof (part as any).text === 'string' && Boolean((part as any).text))
+    .filter((part): part is TextPart => {
+      const item = part as any;
+      return item.thought !== true && typeof item.text === 'string' && Boolean(item.text);
+    })
     .map((part) => part.text)
     .join('')
     .trim();
+}
+
+function removeInlineDataFromContent(content: GeminiContent): GeminiContent {
+  return {
+    role: content.role,
+    parts: content.parts
+      .filter((part) => !(part as any).inline_data && (part as any).thought !== true)
+      .map((part) => cloneJson(part) || part),
+  };
+}
+
+function buildModelContentForHistory(
+  content: GeminiContent | undefined,
+  reply: string,
+  sanitizedReply: SanitizedReply
+): GeminiContent {
+  if (!content || sanitizedReply.leaked) {
+    return { role: 'model', parts: [{ text: reply }] };
+  }
+
+  const cloned = normalizeGeminiContentForRequest(content);
+  if (!cloned) return { role: 'model', parts: [{ text: reply }] };
+
+  // Official Gemini thought signatures are opaque metadata. Keep the parts intact
+  // only when the visible text was already safe; thought summary text is not stored.
+  const sanitizedContent = removeInlineDataFromContent(cloned);
+  return sanitizedContent.parts.length > 0 ? sanitizedContent : { role: 'model', parts: [{ text: reply }] };
 }
 
 type SanitizedReply = {
@@ -634,6 +695,7 @@ async function chat(
   );
 
   const body = await buildRequestBody(userMessage, history, cfg, options);
+  const currentUserContent = removeInlineDataFromContent(body.contents[body.contents.length - 1]);
   const seenToolCalls = new Set();
   const allToolResults: ToolResult[] = [];
   let executedToolCalls = 0;
@@ -720,6 +782,14 @@ async function chat(
           return null;
         }
         if (reply) {
+          if (typeof options.onFinalTurn === 'function') {
+            const modelContent = buildModelContentForHistory(data.candidates?.[0]?.content, reply, sanitizedReply);
+            options.onFinalTurn({
+              userContent: currentUserContent,
+              modelContent,
+              reply,
+            });
+          }
           console.log(
             `[AI] Gemini 回复完成 duration_ms=${Date.now() - requestStartedAt} rounds=${round} ` +
             `tool_calls=${executedToolCalls} reply_chars=${reply.length} reply_preview="${previewText(reply)}"`

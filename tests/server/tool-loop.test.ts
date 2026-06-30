@@ -8,6 +8,8 @@ const ai = require('../../lib/server/ai');
 
 type GeminiPart = {
   text?: string;
+  thought?: boolean;
+  thoughtSignature?: string;
   functionCall?: {
     name: string;
     args: Record<string, unknown>;
@@ -197,6 +199,65 @@ test('chat blocks leaked thought text and retries once for a clean reply', async
     assert.equal(reply, '这是在玩“不交代上下文让 AI 猜”的梗');
     assert.equal(requests.length, 2);
     assert.match(requests[1].contents.at(-1).parts[0].text, /内部草稿或思维链/);
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
+test('buildRequestBody preserves stored Gemini thought signatures in history', async () => {
+  const body = await ai.buildRequestBody('继续', [
+    {
+      role: 'user',
+      text: '上一句',
+      gemini_content: {
+        role: 'user',
+        parts: [{ text: '上一句', thoughtSignature: 'user-sig' }],
+      },
+    },
+    {
+      role: 'model',
+      text: '上一答',
+      gemini_content: {
+        role: 'model',
+        parts: [{ text: '上一答', thoughtSignature: 'model-sig' }],
+      },
+    },
+  ], makeCfg());
+
+  assert.equal(body.contents[0].parts[0].thoughtSignature, 'user-sig');
+  assert.equal(body.contents[1].parts[0].thoughtSignature, 'model-sig');
+  assert.equal(body.contents[2].parts[0].text, '继续');
+});
+
+test('chat ignores thought summary text and stores only safe native response parts', async () => {
+  const oldFetch = global.fetch;
+  const captured: Array<Record<string, any>> = [];
+  global.fetch = (async () => {
+    return jsonResponse({
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts: [
+              { text: '内部摘要不要发出去', thought: true, thoughtSignature: 'opaque-thought' },
+              { text: '最终回答', thoughtSignature: 'visible-sig' },
+            ],
+          },
+        },
+      ],
+    });
+  }) as any;
+
+  try {
+    const reply = await ai.chat('hello', [], makeCfg(), {
+      onFinalTurn: (turn: Record<string, any>) => captured.push(turn),
+    });
+
+    assert.equal(reply, '最终回答');
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].modelContent.parts.length, 1);
+    assert.equal(captured[0].modelContent.parts[0].text, '最终回答');
+    assert.equal(captured[0].modelContent.parts[0].thoughtSignature, 'visible-sig');
   } finally {
     global.fetch = oldFetch;
   }

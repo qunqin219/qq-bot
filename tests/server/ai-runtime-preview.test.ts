@@ -18,6 +18,7 @@ process.env.QQ_BOT_MEMORIES_FILE = path.join(tempRoot, 'memories.json');
 const botCore = require('../../lib/server/bot-core');
 const { DEFAULT_CONFIG } = require('../../lib/server/config');
 const { addMessage } = require('../../lib/server/message-store');
+const conversationStore = require('../../lib/server/conversation-store');
 
 const ONE_BY_ONE_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
@@ -130,7 +131,18 @@ test('runtime preview exposes current image as a readable tool reference', async
   });
 });
 
-test('group runtime does not expose chat-search or AI-history tools', async () => {
+test('group runtime uses role history for the bot own previous replies', async () => {
+  conversationStore.appendTurn('group:424242424', '你怎么看', '00', 10, {
+    user_gemini_content: {
+      role: 'user',
+      parts: [{ text: '你怎么看' }],
+    },
+    model_gemini_content: {
+      role: 'model',
+      parts: [{ text: '00', thoughtSignature: 'model-sig' }],
+    },
+  });
+
   const preview = await botCore.buildAiRuntimePreview({
     event: makeGroupEvent('[CQ:at,qq=1525899506] 继续你刚刚说的'),
     client: makeClient(),
@@ -138,8 +150,14 @@ test('group runtime does not expose chat-search or AI-history tools', async () =
   });
 
   assert.equal(preview.conversationKey, 'group:424242424');
-  assert.deepEqual(preview.history, [], 'group chats should not inject conversations.json as Gemini role history');
-  assert.equal(preview.requestBody.contents.length, 1, 'request body should only contain current grouped prompt');
+  assert.equal(preview.history.length, 2, 'group chats should keep recent AI turns as Gemini role history');
+  assert.equal(preview.requestBody.contents.length, 3);
+  assert.equal(preview.requestBody.contents[0].role, 'user');
+  assert.equal(preview.requestBody.contents[0].parts[0].text, '你怎么看');
+  assert.equal(preview.requestBody.contents[1].role, 'model');
+  assert.equal(preview.requestBody.contents[1].parts[0].text, '00');
+  assert.equal(preview.requestBody.contents[1].parts[0].thoughtSignature, 'model-sig');
+  assert.match(preview.requestBody.contents.at(-1).parts[0].text, /CURRENT_MESSAGE_JSON/);
 
   const declarations = (preview.requestBody.tools || []).flatMap((tool: Record<string, any>) => tool.functionDeclarations || []);
   const names = declarations.map((item: Record<string, any>) => item.name);

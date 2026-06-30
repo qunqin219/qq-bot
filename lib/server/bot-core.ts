@@ -685,6 +685,13 @@ function senderNameForMessage(message: Record<string, any>): string | number {
   return message.group_name || message.nickname || formatSender(message.sender || {}, message.user_id);
 }
 
+function geminiTextContent(role: 'user' | 'model', text: unknown): Record<string, any> {
+  return {
+    role,
+    parts: [{ text: String(text || '') }],
+  };
+}
+
 function imageToolCandidateMessages(event: OneBotEvent): Array<Record<string, any>> {
   const seen = new Set<string>();
   const candidates = [event, ...getMessages(IMAGE_TOOL_SEARCH_LIMIT, null, event.group_id || null)];
@@ -1207,7 +1214,7 @@ async function buildAiRuntimePreview({ event, client, cfg }: AiRuntimePreviewInp
   const isAdmin = isConfiguredAdmin(runtimeCfg, userId);
   const conversationKey = conversationStore.getConversationKey(event);
   const contextTurns = Math.max(1, Number(runtimeCfg.ai_context_turns || 10));
-  const history = runtimeCfg.ai_context_enabled && !groupId
+  const history = runtimeCfg.ai_context_enabled
     ? conversationStore.getHistory(conversationKey, contextTurns * 2)
     : [];
 
@@ -1365,11 +1372,19 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
   );
 
   let aiReply;
+  let finalGeminiTurn: {
+    userContent: Record<string, any>;
+    modelContent: Record<string, any>;
+    reply: string;
+  } | null = null;
   try {
     aiReply = await ai.chat(aiInput, runtime.history, cfg, {
       functionDeclarations,
       extraSystemInstruction,
       autoAttachImages: !groupImageToolEnabled,
+      onFinalTurn: (turn: Record<string, any>) => {
+        finalGeminiTurn = turn as any;
+      },
       executeFunctionCall: async (name: string, args: ToolArgs, meta: Record<string, any> = {}) => {
         const toolStartedAt = Date.now();
         const round = meta.round || '-';
@@ -1440,10 +1455,18 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
 
   const historyUserText = cleanMsg;
   const historyAssistantText = aiReply;
+  const historyUserGeminiContent = groupId
+    ? geminiTextContent('user', historyUserText)
+    : finalGeminiTurn?.userContent;
   conversationStore.appendTurn(conversationKey, historyUserText, historyAssistantText, contextTurns, groupId ? {
     user_id: userId,
     user_name: getEventSenderName(event),
-  } : {});
+    user_gemini_content: historyUserGeminiContent,
+    model_gemini_content: finalGeminiTurn?.modelContent,
+  } : {
+    user_gemini_content: historyUserGeminiContent,
+    model_gemini_content: finalGeminiTurn?.modelContent,
+  });
 
   if (groupId) {
     const outboundMessage = buildGroupReplyMessage(event, cfg, aiReply, parsedReply.replyMessageId);

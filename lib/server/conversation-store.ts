@@ -20,6 +20,7 @@ type ConversationMessage = {
   user_id?: number | string | null;
   user_name?: string | null;
   speaker_name?: string | null;
+  gemini_content?: GeminiContent | null;
 };
 
 type ConversationEntry = {
@@ -32,6 +33,13 @@ type ConversationStoreData = Record<string, ConversationEntry>;
 type TurnMeta = {
   user_id?: number | string | null;
   user_name?: string | null;
+  user_gemini_content?: unknown;
+  model_gemini_content?: unknown;
+};
+
+type GeminiContent = {
+  role: ConversationRole;
+  parts: Array<Record<string, unknown>>;
 };
 
 // conversations.json 位于项目根目录
@@ -81,7 +89,37 @@ function getHistory(key: string, limit: unknown = 20) {
   return messages
     .slice(-safeLimit)
     .filter((m) => m && (m.role === 'user' || m.role === 'model') && typeof m.text === 'string')
-    .map((m) => ({ role: m.role, text: m.text, time: m.time }));
+    .map((m) => ({
+      role: m.role,
+      text: m.text,
+      time: m.time,
+      ...(isGeminiContent(m.gemini_content) ? { gemini_content: m.gemini_content } : {}),
+    }));
+}
+
+function cloneJson<T>(value: T): T | null {
+  try {
+    return JSON.parse(JSON.stringify(value)) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isGeminiContent(value: unknown): value is GeminiContent {
+  const content = value as GeminiContent;
+  return Boolean(
+    content &&
+    (content.role === 'user' || content.role === 'model') &&
+    Array.isArray(content.parts) &&
+    content.parts.length > 0 &&
+    content.parts.every((part) => part && typeof part === 'object' && !Array.isArray(part))
+  );
+}
+
+function normalizeGeminiContent(value: unknown, role: ConversationRole): GeminiContent | null {
+  if (!isGeminiContent(value) || value.role !== role) return null;
+  const cloned = cloneJson(value);
+  return isGeminiContent(cloned) ? cloned : null;
 }
 
 function stripLegacyUserPrefix(text: unknown): { speaker_name: string | null; text: string } {
@@ -144,6 +182,10 @@ function appendTurn(
   const modelEntry: ConversationMessage = { role: 'model', text: String(assistantText), time: now };
   if (meta.user_id) userEntry.user_id = meta.user_id;
   if (meta.user_name) userEntry.user_name = meta.user_name;
+  const userGeminiContent = normalizeGeminiContent(meta.user_gemini_content, 'user');
+  const modelGeminiContent = normalizeGeminiContent(meta.model_gemini_content, 'model');
+  if (userGeminiContent) userEntry.gemini_content = userGeminiContent;
+  if (modelGeminiContent) modelEntry.gemini_content = modelGeminiContent;
   messages.push(userEntry);
   messages.push(modelEntry);
 
