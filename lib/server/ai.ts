@@ -21,6 +21,9 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_TOOL_ROUNDS = 4;
 const DEFAULT_MAX_TOOL_CALLS = 8;
 const DEFAULT_MAX_FUNCTION_CALLS_PER_ROUND = 3;
+const DEFAULT_MAX_HTTP_RETRIES = 3;
+const DEFAULT_HTTP_RETRY_BASE_DELAY_MS = 1000;
+const MAX_HTTP_RETRY_DELAY_MS = 8000;
 
 type Role = 'user' | 'model';
 
@@ -87,6 +90,8 @@ type ChatOptions = {
   maxToolRounds?: number;
   maxToolCalls?: number;
   maxCallsPerRound?: number;
+  maxHttpRetries?: number;
+  httpRetryBaseDelayMs?: number;
 };
 
 function errorMessage(error: unknown): string {
@@ -357,6 +362,30 @@ async function postGenerateContent(url: string, body: GeminiRequestBody): Promis
   });
 }
 
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function retryDelayMs(resp: Response, fallbackMs: number): number {
+  const retryAfter = resp.headers?.get?.('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(MAX_HTTP_RETRY_DELAY_MS, seconds * 1000);
+    }
+    const retryAt = Date.parse(retryAfter);
+    if (Number.isFinite(retryAt)) {
+      return Math.min(MAX_HTTP_RETRY_DELAY_MS, Math.max(0, retryAt - Date.now()));
+    }
+  }
+  return Math.min(MAX_HTTP_RETRY_DELAY_MS, Math.max(0, fallbackMs));
+}
+
 function compactJson(value: unknown, maxLength = 900): string {
   let text: string;
   try {
@@ -477,6 +506,13 @@ async function chat(
     1,
     5
   );
+  const maxHttpRetries = resolveNumber(options.maxHttpRetries, DEFAULT_MAX_HTTP_RETRIES, 0, 5);
+  const httpRetryBaseDelayMs = resolveNumber(
+    options.httpRetryBaseDelayMs,
+    DEFAULT_HTTP_RETRY_BASE_DELAY_MS,
+    0,
+    MAX_HTTP_RETRY_DELAY_MS
+  );
 
   const body = await buildRequestBody(userMessage, history, cfg, options);
   const seenToolCalls = new Set();
@@ -492,17 +528,44 @@ async function chat(
 
   try {
     for (let round = 1; round <= maxToolRounds + 1; round += 1) {
-      const roundStartedAt = Date.now();
-      console.log(`[AI] Gemini 第${round}轮请求开始 contents=${body.contents.length} executed_tool_calls=${executedToolCalls}`);
-      const resp = await postGenerateContent(url, body);
-      console.log(`[AI] Gemini 第${round}轮响应 status=${resp.status} duration_ms=${Date.now() - roundStartedAt}`);
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '');
-        console.error(
-          `[AI] Gemini generateContent 第${round}轮返回错误 ${resp.status}: ${errText.slice(0, 500)}`
+      let resp: Response | null = null;
+      for (let attempt = 0; attempt <= maxHttpRetries; attempt += 1) {
+        const roundStartedAt = Date.now();
+        console.log(
+          `[AI] Gemini 第${round}轮请求开始 attempt=${attempt + 1}/${maxHttpRetries + 1} ` +
+          `contents=${body.contents.length} executed_tool_calls=${executedToolCalls}`
         );
-        return fallbackToolMessages(allToolResults);
+        resp = await postGenerateContent(url, body);
+        console.log(
+          `[AI] Gemini 第${round}轮响应 status=${resp.status} duration_ms=${Date.now() - roundStartedAt} ` +
+          `attempt=${attempt + 1}/${maxHttpRetries + 1}`
+        );
+        if (resp.ok) break;
+
+        const errText = await resp.text().catch(() => '');
+        const retryable = isRetryableHttpStatus(resp.status);
+        const canRetry = retryable && attempt < maxHttpRetries;
+        if (!canRetry) {
+          console.error(
+            `[AI] Gemini generateContent 第${round}轮返回错误 ${resp.status} ` +
+            `attempt=${attempt + 1}/${maxHttpRetries + 1}: ${errText.slice(0, 500)}`
+          );
+          if (retryable) {
+            console.warn(`[AI] Gemini 第${round}轮重试耗尽 status=${resp.status}，本次不回复`);
+            return null;
+          }
+          return fallbackToolMessages(allToolResults);
+        }
+
+        const waitMs = retryDelayMs(resp, httpRetryBaseDelayMs * (2 ** attempt));
+        console.warn(
+          `[AI] Gemini 第${round}轮返回可重试错误 ${resp.status}，${waitMs}ms 后重试 ` +
+          `attempt=${attempt + 1}/${maxHttpRetries + 1}: ${errText.slice(0, 300)}`
+        );
+        await sleep(waitMs);
       }
+
+      if (!resp?.ok) return null;
 
       const data = await resp.json() as GeminiResponse;
       const functionCalls = extractFunctionCalls(data);

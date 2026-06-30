@@ -25,7 +25,7 @@ type GeminiResponse = {
 
 type TestConfig = Record<string, unknown>;
 
-function jsonResponse(data: GeminiResponse, status = 200): Record<string, unknown> {
+function jsonResponse(data: Record<string, unknown>, status = 200): Record<string, unknown> {
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -133,6 +133,51 @@ test('chat skips repeated same-name same-args tool calls', async () => {
 
     assert.equal(reply, '根据已有结果回答');
     assert.equal(calls.length, 1, 'duplicate tool call should not execute twice');
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
+test('chat retries retryable Gemini HTTP errors before replying', async () => {
+  const oldFetch = global.fetch;
+  let attempts = 0;
+  global.fetch = (async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      return jsonResponse({ error: { message: 'Resource exhausted' } } as any, 429);
+    }
+    return jsonResponse(textReply('重试后成功'));
+  }) as any;
+
+  try {
+    const reply = await ai.chat('hello', [], makeCfg(), {
+      maxHttpRetries: 3,
+      httpRetryBaseDelayMs: 0,
+    });
+
+    assert.equal(reply, '重试后成功');
+    assert.equal(attempts, 3);
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
+test('chat stays silent after retryable Gemini HTTP errors are exhausted', async () => {
+  const oldFetch = global.fetch;
+  let attempts = 0;
+  global.fetch = (async () => {
+    attempts += 1;
+    return jsonResponse({ error: { message: 'Resource exhausted' } } as any, 429);
+  }) as any;
+
+  try {
+    const reply = await ai.chat('hello', [], makeCfg(), {
+      maxHttpRetries: 3,
+      httpRetryBaseDelayMs: 0,
+    });
+
+    assert.equal(reply, null);
+    assert.equal(attempts, 4, 'maxHttpRetries means three retries after the initial request');
   } finally {
     global.fetch = oldFetch;
   }
