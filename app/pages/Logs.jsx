@@ -12,7 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { CopyIcon, RefreshCwIcon, ScrollTextIcon, SearchIcon } from '../../components/Icons.jsx'
 const quickFilters = [
   { label: '全部', value: '' },
@@ -104,7 +103,7 @@ export default function Logs() {
   if (error && !data.lines?.length) return <ErrorBox message={error} onRetry={fetchData} />
 
   return (
-    <div>
+    <div className="flex h-[calc(100dvh-4rem)] min-h-0 flex-col">
       {ToastEl}
       <PageHeader
         title="运行日志"
@@ -130,7 +129,7 @@ export default function Logs() {
         }
       />
 
-      <Card className="mb-5 gap-0 p-0">
+      <Card className="mb-5 shrink-0 gap-0 p-0">
         <PanelHeader
           title="日志筛选"
           description="按关键词和尾部行数读取 server.log。"
@@ -199,7 +198,7 @@ export default function Logs() {
 
       {error && <div className="mb-4"><ErrorBox message={error} onRetry={fetchData} /></div>}
 
-      <Card className="gap-0 p-0">
+      <Card className="min-h-0 flex-1 gap-0 overflow-hidden p-0">
         <PanelHeader
           title="日志输出"
           description={newestFirst ? '最新日志显示在上方。' : '最旧日志显示在上方。'}
@@ -212,7 +211,7 @@ export default function Logs() {
             description="换一个关键词或扩大最近行数后再查询。"
           />
         ) : (
-          <ScrollArea className="max-h-[68vh]">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             <div className="p-3 font-mono text-xs leading-relaxed">
               {visibleLines.map((line, idx) => (
                 <div
@@ -224,7 +223,7 @@ export default function Logs() {
                 </div>
               ))}
             </div>
-          </ScrollArea>
+          </div>
         )}
       </Card>
     </div>

@@ -80,6 +80,15 @@ function readTailLines(filePath: string, lineLimit = 300, maxBytes = 512 * 1024)
   return lines.slice(-lineLimit);
 }
 
+function collapseAdjacentDuplicateLines(lines: string[]): string[] {
+  const result: string[] = [];
+  for (const line of lines) {
+    if (result[result.length - 1] === line) continue;
+    result.push(line);
+  }
+  return result;
+}
+
 // ── 认证配置 ──────────────────────────────────────────────
 const FALLBACK_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
 const ALLOWED_CORS_ORIGINS = [
@@ -568,10 +577,11 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
   app.get('/api/logs', requireAuth, (req, res) => {
     const limit = Math.max(20, Math.min(2000, parseInt(String(req.query.limit || ''), 10) || 300));
     const query = String(req.query.q || '').trim().toLowerCase();
-    let lines = readTailLines(SERVER_LOG_FILE, limit, 1024 * 1024);
+    let lines = collapseAdjacentDuplicateLines(readTailLines(SERVER_LOG_FILE, limit * 2, 1024 * 1024));
     if (query) {
       lines = lines.filter((line) => line.toLowerCase().includes(query));
     }
+    lines = lines.slice(-limit);
     const stat = fs.existsSync(SERVER_LOG_FILE) ? fs.statSync(SERVER_LOG_FILE) : null;
     return res.json({
       lines,

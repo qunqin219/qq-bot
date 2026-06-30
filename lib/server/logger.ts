@@ -10,6 +10,7 @@ type LoggerState = {
   installed: boolean;
   stream: fs.WriteStream;
   originals: Record<ConsoleMethod, (...args: any[]) => void>;
+  mirrorToFile: Record<ConsoleMethod, boolean>;
 };
 
 const LOGGER_STATE_KEY = Symbol.for('qq-bot.server-logger');
@@ -50,12 +51,27 @@ function setLoggerState(state: LoggerState): void {
   (globalThis as any)[LOGGER_STATE_KEY] = state;
 }
 
+function sameFileStat(a: fs.Stats, b: fs.Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function fdTargetsFile(fd: number, filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    return sameFileStat(fs.fstatSync(fd), fs.statSync(filePath));
+  } catch {
+    return false;
+  }
+}
+
 function installServerLogger(logFile = SERVER_LOG_FILE): LoggerState {
   const current = getLoggerState();
   if (current?.installed) return current;
 
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   const stream = fs.createWriteStream(logFile, { flags: 'a' });
+  const stdoutAlreadyWritesLog = fdTargetsFile(1, logFile);
+  const stderrAlreadyWritesLog = fdTargetsFile(2, logFile);
   const originals: LoggerState['originals'] = {
     log: console.log.bind(console),
     info: console.info.bind(console),
@@ -69,16 +85,29 @@ function installServerLogger(logFile = SERVER_LOG_FILE): LoggerState {
     warn: 'WARN',
     error: 'ERROR',
   };
+  const mirrorToFile: Record<ConsoleMethod, boolean> = {
+    log: !stdoutAlreadyWritesLog,
+    info: !stdoutAlreadyWritesLog,
+    warn: !stderrAlreadyWritesLog,
+    error: !stderrAlreadyWritesLog,
+  };
 
   (Object.keys(levels) as ConsoleMethod[]).forEach((method) => {
     console[method] = (...args: unknown[]) => {
       const formatted = formatConsoleLine(levels[method], args);
       originals[method](formatted);
-      stream.write(`${formatted}\n`);
+      if (mirrorToFile[method]) {
+        stream.write(`${formatted}\n`);
+      }
     };
   });
 
-  const state = { installed: true, stream, originals };
+  const state = {
+    installed: true,
+    stream,
+    originals,
+    mirrorToFile,
+  };
   setLoggerState(state);
   return state;
 }
