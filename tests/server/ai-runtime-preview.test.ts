@@ -5,11 +5,19 @@ declare const Buffer: any;
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-bot-runtime-preview-test-'));
 process.env.QQ_BOT_ALLOW_LOCAL_IMAGE_FETCH = '1';
+process.env.QQ_BOT_MESSAGES_FILE = path.join(tempRoot, 'messages.json');
+process.env.QQ_BOT_CONVERSATIONS_FILE = path.join(tempRoot, 'conversations.json');
+process.env.QQ_BOT_MEMORIES_FILE = path.join(tempRoot, 'memories.json');
 
 const botCore = require('../../lib/server/bot-core');
 const { DEFAULT_CONFIG } = require('../../lib/server/config');
+const { addMessage } = require('../../lib/server/message-store');
 
 const ONE_BY_ONE_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
@@ -137,6 +145,61 @@ test('group runtime does not expose chat-search or AI-history tools', async () =
   assert.equal(names.includes('qq_search_chat_history'), false);
   assert.doesNotMatch(preview.aiInput, /qq_get_ai_conversation_history/);
   assert.doesNotMatch(preview.aiInput, /qq_search_chat_history/);
+});
+
+test('quoted link question does not attach unrelated recent group images', async () => {
+  await withImageServer(async (imageUrl) => {
+    addMessage({
+      post_type: 'message',
+      message_type: 'group',
+      group_id: 424242424,
+      user_id: 2054323568,
+      message_id: 9001,
+      raw_message: `[CQ:image,file=unrelated.png,url=${imageUrl}]`,
+      message: `[CQ:image,file=unrelated.png,url=${imageUrl}]`,
+      sender: { nickname: 'momo' },
+    });
+    addMessage({
+      post_type: 'message',
+      message_type: 'group',
+      group_id: 424242424,
+      user_id: 3605900361,
+      message_id: 9002,
+      raw_message: '【【IGN】动画剧集《赛博朋克：边缘行者2》先导预告】https://www.bilibili.com/video/BV1smKX6kED6',
+      message: '【【IGN】动画剧集《赛博朋克：边缘行者2》先导预告】https://www.bilibili.com/video/BV1smKX6kED6',
+      sender: { nickname: 'qunqin', card: 'qunqin Sleep' },
+    });
+
+    const client = makeClient();
+    client.getMsg = async (messageId: number | string) => {
+      if (Number(messageId) !== 9002) return { status: 'failed', data: null };
+      return {
+        status: 'ok',
+        data: {
+          message_id: 9002,
+          user_id: 3605900361,
+          raw_message: '【【IGN】动画剧集《赛博朋克：边缘行者2》先导预告】https://www.bilibili.com/video/BV1smKX6kED6',
+          sender: { nickname: 'qunqin', card: 'qunqin Sleep' },
+        },
+      };
+    };
+
+    const preview = await botCore.buildAiRuntimePreview({
+      event: {
+        ...makeGroupEvent('[CQ:reply,id=9002][CQ:at,qq=1525899506] 介绍一下这个'),
+        message_id: 9003,
+      },
+      client,
+      cfg: makeConfig(),
+    });
+
+    assert.match(preview.aiInput, /QUOTED_MESSAGE_JSON/);
+    assert.match(preview.aiInput, /BV1smKX6kED6/);
+    assert.doesNotMatch(preview.aiInput, /recent_group_message_image/);
+
+    const last = preview.requestBody.contents.at(-1);
+    assert.equal(last.parts.length, 1, 'unrelated recent images should stay out of visual input');
+  });
 });
 
 export {};

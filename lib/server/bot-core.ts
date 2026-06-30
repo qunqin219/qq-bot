@@ -352,6 +352,20 @@ function isCommandContextMessage(raw: unknown, prefix = '/'): boolean {
   );
 }
 
+function currentQuestionExplicitlyTargetsRecentImage(raw: unknown): boolean {
+  if (extractReplyMessageId(raw)) return false;
+  if (/\[CQ:image,/.test(String(raw || ''))) return false;
+  const text = ai.stripCqCodes(raw).trim();
+  return /图片|截图|照片|图里|图中|这张|那张|上图|上面.*图|刚才.*图|看图|看下图/.test(text);
+}
+
+function getContextCutoffTime(event: OneBotEvent): number {
+  const currentStored = getMessages(200, null, event.group_id || null)
+    .find((m) => m.message_id === event.message_id);
+  const ts = currentStored ? Date.parse(String(currentStored.time || '')) : Date.now();
+  return Number.isFinite(ts) ? ts : Date.now();
+}
+
 function formatTime(iso: unknown): string {
   if (!iso) return '';
   try {
@@ -857,18 +871,32 @@ async function buildRecentGroupContext(
 ): Promise<string> {
   if (!cfg.ai_group_context_enabled || !event.group_id) return '';
   const limit = Math.max(1, Math.min(50, Number(cfg.ai_group_context_messages || 20)));
-  const messages = getMessages(limit + 12, null, event.group_id)
+  const scanLimit = Math.max(limit + 12, Math.min(500, limit * 4 + 50));
+  const cutoffTime = getContextCutoffTime(event);
+  const messagesLatestFirst = getMessages(scanLimit, null, event.group_id)
     .filter((m) => m.message_id !== event.message_id)
+    .filter((m) => {
+      const ts = Date.parse(String(m.time || ''));
+      return !Number.isFinite(ts) || ts <= cutoffTime;
+    })
     .filter((m) => !(cfg.ai_group_context_exclude_bot && m.user_id === event.self_id))
     .filter((m) => !(cfg.ai_filter_stickers !== false && ai.isStickerMessage(m.raw_message)))
     .filter((m) => !isCommandContextMessage(m.raw_message, cfg.command_prefix || '/'))
-    .slice(0, limit)
-    .reverse();
+    .slice(0, limit);
+  const messages = messagesLatestFirst.reverse();
 
   if (!messages.length) return '';
 
+  const attachRecentImage = currentQuestionExplicitlyTargetsRecentImage(event.raw_message || '');
+  const recentImageSource = attachRecentImage
+    ? messagesLatestFirst.find((m) => /\[CQ:image,/.test(String(m.raw_message || '')) && !ai.isStickerMessage(m.raw_message))
+    : null;
+  const recentImageSourceId = recentImageSource?.message_id !== undefined && recentImageSource?.message_id !== null
+    ? String(recentImageSource.message_id)
+    : null;
   const lines: string[] = [];
   let resolvedReplyCount = 0;
+  let attachedRecentImageCount = 0;
   for (const m of messages) {
     const raw = String(m.raw_message || '');
     lines.push(promptJson(buildContextMessageRecord(m, event.self_id, {
@@ -876,14 +904,19 @@ async function buildRecentGroupContext(
       record_type: 'recent_group_message',
     })));
 
-    // 普通图片要把原始 CQ 码也带给 ai.ts，后者会提取 URL 并转成 Gemini inline_data。
-    // 表情包已在上面的 filter 中跳过，不会走到这里。
-    if (/\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw)) {
+    // 最近图片默认只作为文字背景，避免污染“当前消息/引用消息”的视觉输入。
+    // 只有用户明确问上图/截图/这张图时，才附带最近的一张普通图片。
+    if (
+      recentImageSourceId &&
+      String(m.message_id) === recentImageSourceId &&
+      attachedRecentImageCount < 1
+    ) {
       lines.push(promptJson({
         record_type: 'recent_group_message_image',
         source_message_id: m.message_id ?? null,
         image_cq: raw,
       }));
+      attachedRecentImageCount += 1;
     }
 
     // 历史聊天里有人“引用了一条图片消息”时，当前消息本身只有 [CQ:reply]，图片在被引用消息里。
@@ -903,13 +936,19 @@ async function buildRecentGroupContext(
           quoted_speaker_name: formatSender(result.data?.sender || {}, result.data?.user_id),
           quoted_text: summarizeRawMessage(quotedRaw, event.self_id).slice(0, 500),
         }));
-        if (/\[CQ:image,/.test(quotedRaw) && !ai.isStickerMessage(quotedRaw)) {
+        if (
+          attachRecentImage &&
+          attachedRecentImageCount < 1 &&
+          /\[CQ:image,/.test(quotedRaw) &&
+          !ai.isStickerMessage(quotedRaw)
+        ) {
           lines.push(promptJson({
             record_type: 'quoted_message_image_for_recent_group_message',
             source_message_id: m.message_id ?? null,
             quoted_message_id: replyId,
             image_cq: quotedRaw,
           }));
+          attachedRecentImageCount += 1;
         }
         resolvedReplyCount += 1;
       }
