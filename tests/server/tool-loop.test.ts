@@ -138,6 +138,47 @@ test('chat skips repeated same-name same-args tool calls', async () => {
   }
 });
 
+test('chat appends tool-provided image parts only after the model asks for an image', async () => {
+  const oldFetch = global.fetch;
+  const requests: any[] = [];
+  const responses = [
+    functionCall('qq_read_image', { message_id: 9001 }),
+    textReply('看到了'),
+  ];
+  global.fetch = (async (_url: any, init: any) => {
+    requests.push(JSON.parse(init.body));
+    return jsonResponse(responses.shift()!);
+  }) as any;
+
+  try {
+    const reply = await ai.chat('[CQ:image,file=demo.png,url=https://example.test/demo.png] 这是什么', [], makeCfg(), {
+      autoAttachImages: false,
+      functionDeclarations: [
+        { name: 'qq_read_image', parameters: { type: 'object', properties: {} } },
+      ],
+      executeFunctionCall: async () => ({
+        ok: true,
+        message: '已读取图片',
+        __ai_inline_parts: [
+          { inline_data: { mime_type: 'image/png', data: 'aW1hZ2U=' } },
+        ],
+      }),
+    });
+
+    assert.equal(reply, '看到了');
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].contents.at(-1).parts.length, 1, 'first request should not pre-attach images');
+    assert.equal(requests[0].contents.at(-1).parts[0].text, '这是什么');
+
+    const toolParts = requests[1].contents.at(-1).parts;
+    assert.equal(toolParts[0].functionResponse.name, 'qq_read_image');
+    assert.equal(toolParts[0].functionResponse.response.__ai_inline_parts, undefined);
+    assert.equal(toolParts[1].inline_data.mime_type, 'image/png');
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
 test('chat retries retryable Gemini HTTP errors before replying', async () => {
   const oldFetch = global.fetch;
   let attempts = 0;

@@ -5,10 +5,14 @@ declare const module: any;
 
 const { loadConfig } = require('./config');
 const { addMessage, getMessages } = require('./message-store');
+const fs = require('fs');
 const ai = require('./ai');
 const imageCache = require('./image-cache');
 const conversationStore = require('./conversation-store');
 const memoryStore = require('./memory-store');
+
+const INTERNAL_INLINE_PARTS_FIELD = '__ai_inline_parts';
+const IMAGE_TOOL_SEARCH_LIMIT = 120;
 
 type Role = 'owner' | 'admin' | 'member' | 'unknown' | 'none' | string;
 
@@ -81,6 +85,7 @@ type ManagementPromptContext = {
 
 type ToolDeclarationOptions = {
   memoryEnabled?: boolean;
+  imageReadEnabled?: boolean;
   memberListEnabled?: boolean;
   managementEnabled?: boolean;
 };
@@ -120,6 +125,11 @@ function summarizeToolResult(result: Record<string, any> | null | undefined): Re
     ok: result.ok,
     action: result.action,
     message: result.message,
+    message_id: result.message_id,
+    image_key: result.image_key,
+    image_index: result.image_index,
+    speaker_qq: result.speaker_qq,
+    speaker_name: result.speaker_name,
     target_count: result.target_count,
     success_count: result.success_count,
     failed_count: result.failed_count,
@@ -200,6 +210,7 @@ function buildContextMessageRecord(
   extra: Record<string, any> = {}
 ): Record<string, any> {
   const raw = String(message.raw_message || '');
+  const images = buildImageRefs(raw);
   return {
     message_id: message.message_id ?? null,
     time: message.time || null,
@@ -207,8 +218,26 @@ function buildContextMessageRecord(
     speaker_name: message.group_name || message.nickname || String(message.user_id || '未知用户'),
     directed_to_bot: isBotMentionedRaw(raw, selfId),
     text: summarizeRawMessage(raw, selfId).slice(0, 500),
+    ...(images.length ? { images } : {}),
     ...extra,
   };
+}
+
+function buildImageRefs(raw: unknown): Array<Record<string, any>> {
+  return imageCache.extractImageRecords(raw, {
+    ignoreStickers: true,
+    maxImages: 5,
+  }).map((record: Record<string, any>, index: number) => ({
+    image_key: imageCache.cacheKeyForRecord(record),
+    image_index: index + 1,
+    file: record.file || null,
+    summary: record.summary || null,
+    file_size: record.file_size || null,
+  }));
+}
+
+function messageTime(message: Record<string, any>): string | null {
+  return message.time || message.created_at || null;
 }
 
 function getCurrentHourText() {
@@ -352,11 +381,6 @@ function isCommandContextMessage(raw: unknown, prefix = '/'): boolean {
   );
 }
 
-function isRegularImageMessage(message: Record<string, any>): boolean {
-  const raw = String(message.raw_message || '');
-  return /\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw);
-}
-
 function formatTime(iso: unknown): string {
   if (!iso) return '';
   try {
@@ -435,6 +459,21 @@ async function getMemberRole(
 
 function buildGroupManagementFunctionDeclarations(options: ToolDeclarationOptions = {}): Array<Record<string, any>> {
   const declarations: Array<Record<string, any>> = [];
+  if (options.imageReadEnabled) {
+    declarations.push({
+      name: 'qq_read_image',
+      description: '按需读取当前 QQ 群上下文中的图片内容。只有当前问题确实需要看图、识别截图、解释图片、或用户明确指向某张图片时才调用。优先使用上下文 images 里的 image_key；也可以用 message_id 和 image_index 读取某条消息的第几张图。',
+      parameters: {
+        type: 'object',
+        properties: {
+          image_key: { type: 'string', description: '上下文 images 数组里的 image_key，最精确' },
+          message_id: { type: 'integer', description: '包含图片的群消息 message_id' },
+          image_index: { type: 'integer', description: '同一条消息里的第几张图片，从 1 开始。默认 1' },
+          reason: { type: 'string', description: '为什么需要读取这张图片，简短说明' },
+        },
+      },
+    });
+  }
   if (options.memoryEnabled) {
     declarations.push(
       {
@@ -634,6 +673,142 @@ function executeMemoryTool(
   return null;
 }
 
+function idsEqual(a: unknown, b: unknown): boolean {
+  if (a == null || b == null) return false;
+  if (String(a) === String(b)) return true;
+  const left = Number(a);
+  const right = Number(b);
+  return Number.isFinite(left) && Number.isFinite(right) && left === right;
+}
+
+function senderNameForMessage(message: Record<string, any>): string | number {
+  return message.group_name || message.nickname || formatSender(message.sender || {}, message.user_id);
+}
+
+function imageToolCandidateMessages(event: OneBotEvent): Array<Record<string, any>> {
+  const seen = new Set<string>();
+  const candidates = [event, ...getMessages(IMAGE_TOOL_SEARCH_LIMIT, null, event.group_id || null)];
+  return candidates.filter((message) => {
+    if (!message) return false;
+    if (message.group_id && event.group_id && !idsEqual(message.group_id, event.group_id)) return false;
+    const key = String(message.message_id || `${message.user_id || ''}:${messageTime(message) || ''}`);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function findImageForTool(
+  args: ToolArgs,
+  event: OneBotEvent,
+  cfg: BotConfig
+): Record<string, any> | null {
+  const wantedKey = String(args?.image_key || '').trim();
+  const wantedMessageId = args?.message_id ?? null;
+  const wantedIndex = Math.max(1, Number(args?.image_index || 1));
+  const allowDefaultLatest = !wantedKey && !wantedMessageId;
+
+  for (const message of imageToolCandidateMessages(event)) {
+    if (wantedMessageId && !idsEqual(message.message_id, wantedMessageId)) continue;
+    const raw = String(message.raw_message || message.message || '');
+    const records = imageCache.extractImageRecords(raw, {
+      ignoreStickers: cfg.ai_filter_stickers !== false,
+      maxImages: 5,
+    });
+    for (const [index, record] of records.entries()) {
+      const imageKey = imageCache.cacheKeyForRecord(record);
+      const imageIndex = index + 1;
+      if (wantedKey && imageKey !== wantedKey) continue;
+      if (!wantedKey && wantedMessageId && imageIndex !== wantedIndex) continue;
+      if (wantedKey || wantedMessageId || allowDefaultLatest) {
+        return { message, record, imageKey, imageIndex };
+      }
+    }
+  }
+
+  return null;
+}
+
+async function imageRecordToInlinePart(
+  record: Record<string, any>,
+  meta: Record<string, any>
+): Promise<{ ok: true; part: Record<string, any>; entry: Record<string, any> } | { ok: false; message: string }> {
+  const entry = imageCache.getCachedImage(record) || await imageCache.cacheImageRecord(record, {
+    message_id: meta.message_id || null,
+    group_id: meta.group_id || null,
+    user_id: meta.user_id || null,
+    message_type: meta.message_type || null,
+  });
+  if (!entry?.file_path || !fs.existsSync(entry.file_path)) {
+    return { ok: false, message: '图片还没有缓存成功，且临时 URL 可能已经不可用' };
+  }
+  const size = Number(entry.size || fs.statSync(entry.file_path).size || 0);
+  const maxBytes = Number(imageCache.MAX_IMAGE_BYTES || 8 * 1024 * 1024);
+  if (size > maxBytes) return { ok: false, message: `图片过大：${size} bytes` };
+  const buf = fs.readFileSync(entry.file_path);
+  return {
+    ok: true,
+    entry,
+    part: {
+      inline_data: {
+        mime_type: entry.mime_type || 'image/jpeg',
+        data: buf.toString('base64'),
+      },
+    },
+  };
+}
+
+async function executeReadImageTool(
+  args: ToolArgs,
+  context: GroupManagementContext
+): Promise<Record<string, any>> {
+  const { event, cfg } = context;
+  if (!event.group_id) {
+    return { ok: false, message: 'qq_read_image 只能读取当前群聊上下文里的图片' };
+  }
+  const found = findImageForTool(args, event, cfg);
+  if (!found) {
+    return {
+      ok: false,
+      action: 'read_image',
+      message: '没有在当前群最近上下文里找到这张图片；请使用上下文 images 里的 image_key 或 message_id',
+    };
+  }
+
+  const { message, record, imageKey, imageIndex } = found;
+  const loaded = await imageRecordToInlinePart(record, {
+    message_id: message.message_id || null,
+    group_id: event.group_id || null,
+    user_id: message.user_id || null,
+    message_type: message.message_type || 'group',
+  });
+  if (loaded.ok === false) {
+    return {
+      ok: false,
+      action: 'read_image',
+      message_id: message.message_id ?? null,
+      image_key: imageKey,
+      image_index: imageIndex,
+      message: loaded.message,
+    };
+  }
+
+  return {
+    ok: true,
+    action: 'read_image',
+    message_id: message.message_id ?? null,
+    image_key: imageKey,
+    image_index: imageIndex,
+    speaker_qq: message.user_id ?? null,
+    speaker_name: senderNameForMessage(message),
+    text: summarizeRawMessage(message.raw_message || message.message || '', event.self_id).slice(0, 300),
+    mime_type: loaded.entry.mime_type || 'image/jpeg',
+    size: loaded.entry.size || null,
+    message: `已读取图片 message_id=${message.message_id ?? '-'} image_index=${imageIndex}`,
+    [INTERNAL_INLINE_PARTS_FIELD]: [loaded.part],
+  };
+}
+
 async function executeGroupManagementTool(
   name: string,
   args: ToolArgs,
@@ -653,6 +828,9 @@ async function executeGroupManagementTool(
   }
 
   if (!groupId) return deny('这个工具只能在群聊里用');
+  if (name === 'qq_read_image') {
+    return executeReadImageTool(args, context);
+  }
   if (!requesterIsAdmin) return deny('你没有权限让我读取群成员列表或执行群管理操作');
   if (isMutatingGroupManagementTool(name) && !hasExplicitManagementConfirmation(event.raw_message || '')) {
     return deny('为了避免误操作，群管理动作需要管理员在当前消息中明确写“确认执行”或“确认禁言/确认解禁/确认踢出/确认全员禁言”。我没有执行这次操作。');
@@ -815,12 +993,13 @@ async function buildQuotedMessageContext(
     return '';
   }
 
+  const images = buildImageRefs(raw);
   const record = {
     message_id: replyId,
     speaker_qq: data.user_id ?? null,
     speaker_name: senderName,
     text: summary,
-    image_cq: /\[CQ:image,/.test(raw) ? raw : null,
+    ...(images.length ? { images } : {}),
   };
   return [
     'QUOTED_MESSAGE_JSON（当前消息直接引用的重点消息；speaker_* 是被引用消息的发言人）:',
@@ -872,20 +1051,6 @@ async function buildRecentGroupContext(
 
   if (!messages.length) return '';
 
-  const shouldAttachRecentImages = !extractReplyMessageId(event.raw_message || '') &&
-    !/\[CQ:image,/.test(String(event.raw_message || ''));
-  const recentImageAttachments = shouldAttachRecentImages
-    ? messagesLatestFirst.filter(isRegularImageMessage).slice(0, 3).reverse()
-    : [];
-  const imageAttachmentLines = recentImageAttachments.map((m, index) => promptJson({
-    visual_index: index + 1,
-    message_id: m.message_id ?? null,
-    time: formatTime(m.time),
-    speaker_qq: m.user_id ?? null,
-    speaker_name: m.group_name || m.nickname || String(m.user_id || '未知用户'),
-    text: summarizeRawMessage(m.raw_message, event.self_id).slice(0, 500),
-    image_cq: m.raw_message,
-  }));
   const lines: string[] = [];
   let resolvedReplyCount = 0;
   for (const m of messages) {
@@ -896,7 +1061,7 @@ async function buildRecentGroupContext(
     })));
 
     // 历史聊天里有人“引用了一条图片消息”时，当前消息本身只有 [CQ:reply]，图片在被引用消息里。
-    // 这里仅把被引用消息做成文字摘要；视觉输入统一走 RECENT_IMAGE_ATTACHMENTS_JSONL。
+    // 这里仅把被引用消息做成文字和图片引用摘要；真正看图必须由模型按需调用 qq_read_image。
     const replyId = extractReplyMessageId(raw);
     if (replyId && client?.getMsg && cfg.ai_group_context_include_quote && resolvedReplyCount < 5) {
       const result = await client.getMsg(replyId);
@@ -904,6 +1069,7 @@ async function buildRecentGroupContext(
         ? (result.data?.raw_message || String(result.data?.message || ''))
         : '';
       if (quotedRaw && !(cfg.ai_filter_stickers !== false && ai.isStickerMessage(quotedRaw))) {
+        const quotedImages = buildImageRefs(quotedRaw);
         lines.push(promptJson({
           record_type: 'quoted_message_for_recent_group_message',
           source_message_id: m.message_id ?? null,
@@ -911,18 +1077,14 @@ async function buildRecentGroupContext(
           quoted_speaker_qq: result.data?.user_id ?? null,
           quoted_speaker_name: formatSender(result.data?.sender || {}, result.data?.user_id),
           quoted_text: summarizeRawMessage(quotedRaw, event.self_id).slice(0, 500),
+          ...(quotedImages.length ? { quoted_images: quotedImages } : {}),
         }));
         resolvedReplyCount += 1;
       }
     }
   }
 
-  return [
-    imageAttachmentLines.length
-      ? `RECENT_IMAGE_ATTACHMENTS_JSONL（可选视觉附件；visual_index 对应随后的图片输入顺序；模型自行判断是否和当前问题有关，不相关就忽略）:\n${imageAttachmentLines.join('\n')}`
-      : '',
-    `RECENT_GROUP_MESSAGES_JSONL（按时间从旧到新；每行一条记录；speaker_qq/speaker_name 永远表示该行消息的发言人）:\n${lines.join('\n')}`,
-  ].filter(Boolean).join('\n\n');
+  return `RECENT_GROUP_MESSAGES_JSONL（按时间从旧到新；每行一条记录；speaker_qq/speaker_name 永远表示该行消息的发言人；images 是可按需读取的图片引用，不是已经看过的图片）:\n${lines.join('\n')}`;
 }
 
 function findRecentUnansweredBotMention(event: OneBotEvent, cfg: BotConfig): Record<string, any> | null {
@@ -952,10 +1114,8 @@ function buildPendingBotMentionContext(event: OneBotEvent, cfg: BotConfig): stri
   if (!isOnlyBotMentionMessage(event.raw_message || '', event.self_id)) return '';
   const pending = findRecentUnansweredBotMention(event, cfg);
   if (!pending) return '';
-  const raw = String(pending.raw_message || '');
   const record = buildContextMessageRecord(pending, event.self_id, {
     time: formatTime(pending.time),
-    image_cq: /\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw) ? raw : null,
   });
   return [
     'PENDING_UNANSWERED_BOT_MENTION_JSON（当前用户本次只 @Bot 且没有新问题时，用它判断是否在催促上一次未回答请求）:',
@@ -978,10 +1138,11 @@ async function buildGroupAwarePrompt(
       '- 只回答 CURRENT_MESSAGE_JSON 里的当前用户本条消息；它的 speaker_qq/speaker_name 是当前提问者',
       '- 如果存在 QUOTED_MESSAGE_JSON，它是当前消息直接引用的重点对象；优先围绕它回答',
       '- RECENT_GROUP_MESSAGES_JSONL 只是背景；每行的 speaker_qq/speaker_name 只属于该行消息，不要当成当前提问者',
-      '- RECENT_IMAGE_ATTACHMENTS_JSONL 是最近群聊里的候选图片附件；是否相关由你根据当前问题、引用关系、时间线和发言人自行判断，不相关就忽略',
+      '- CURRENT_MESSAGE_JSON、QUOTED_MESSAGE_JSON 和 RECENT_GROUP_MESSAGES_JSONL 里的 images 只是可读取图片引用；你还没有看过这些图片',
+      '- 只有当前问题确实需要识图、解释截图、判断图片内容，或用户明确说“这张图/图片/截图/图里”时，才调用 qq_read_image 读取对应 image_key 或 message_id',
+      '- 文本追问、继续介绍、解释上文、评价讨论时，优先基于最近文字和引用回答，不要因为上下文里有 images 就主动看图',
       '- 如果 CURRENT_MESSAGE_JSON 和历史上下文冲突，以 CURRENT_MESSAGE_JSON 为准',
       '- 如果用户问“谁说的/他说的/那条/上面那条”，先用 message_id、speaker_qq、speaker_name 判断指向，不确定就说明不确定',
-      '- 视觉输入来自当前消息、直接引用消息，或 RECENT_IMAGE_ATTACHMENTS_JSONL 里的候选图；候选图需要你判断相关性，不要因为看见图片就忽略当前文字/引用/链接',
       '- 普通闲聊、接话、评价上文，优先基于当前消息、引用消息和最近上下文直接回答',
       '- 需要外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格、版本或状态时，联网工具可用再查证',
       '- 只有用户明确要求引用/回复/评价某条消息，或明显用“他/她/那条/上面那条”指向某条上文时，才在最终回复第一行输出“引用消息ID：数字”',
@@ -1018,13 +1179,15 @@ async function buildGroupAwarePrompt(
   const recent = await buildRecentGroupContext(event, client, cfg);
   if (recent) sections.push(recent);
 
+  const currentImages = buildImageRefs(currentMsg);
   sections.push([
     'CURRENT_MESSAGE_JSON（最高优先级；speaker_* 是当前提问者）:',
     promptJson({
       message_id: event.message_id ?? null,
       speaker_qq: event.user_id ?? null,
       speaker_name: getEventSenderName(event),
-      text: annotateAtMentions(currentMsg, event.self_id),
+      text: summarizeRawMessage(currentMsg, event.self_id),
+      ...(currentImages.length ? { images: currentImages } : {}),
     }),
   ].join('\n'));
   return sections.join('\n\n');
@@ -1067,8 +1230,10 @@ async function buildAiRuntimePreview({ event, client, cfg }: AiRuntimePreviewInp
     : null;
 
   const aiInput = await buildGroupAwarePrompt(event, client, runtimeCfg, msg, managementContext);
+  const groupImageToolEnabled = Boolean(groupId && runtimeCfg.ai_group_context_enabled);
   const functionDeclarations = buildGroupManagementFunctionDeclarations({
     memoryEnabled: runtimeCfg.ai_memory_enabled === true,
+    imageReadEnabled: groupImageToolEnabled,
     memberListEnabled: memberListToolsEnabled,
     managementEnabled: managementToolsEnabled,
   });
@@ -1078,6 +1243,7 @@ async function buildAiRuntimePreview({ event, client, cfg }: AiRuntimePreviewInp
   const requestBody = await ai.buildRequestBody(aiInput, history, runtimeCfg, {
     functionDeclarations,
     extraSystemInstruction,
+    autoAttachImages: !groupImageToolEnabled,
   });
 
   return {
@@ -1189,6 +1355,7 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     aiInput,
   } = runtime;
 
+  const groupImageToolEnabled = Boolean(groupId && cfg.ai_group_context_enabled);
   const aiStartedAt = Date.now();
   console.log(
     `[AI] 回复开始 conversation=${conversationKey} type=${msgType || '-'} group=${groupId || '-'} user=${userId || '-'} ` +
@@ -1202,6 +1369,7 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     aiReply = await ai.chat(aiInput, runtime.history, cfg, {
       functionDeclarations,
       extraSystemInstruction,
+      autoAttachImages: !groupImageToolEnabled,
       executeFunctionCall: async (name: string, args: ToolArgs, meta: Record<string, any> = {}) => {
         const toolStartedAt = Date.now();
         const round = meta.round || '-';

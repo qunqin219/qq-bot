@@ -87,7 +87,7 @@ function makeClient(): TestClient {
   };
 }
 
-test('runtime preview shows current @ text outranks an attached backend-log screenshot', async () => {
+test('runtime preview exposes current image as a readable tool reference', async () => {
   assert.equal(typeof botCore.buildAiRuntimePreview, 'function');
 
   await withImageServer(async (imageUrl) => {
@@ -102,7 +102,9 @@ test('runtime preview shows current @ text outranks an attached backend-log scre
     assert.match(preview.aiInput, /sam最新动态/);
     assert.match(preview.aiInput, /CURRENT_MESSAGE_JSON/);
     assert.match(preview.aiInput, /speaker_qq/);
-    assert.match(preview.aiInput, /候选图需要你判断相关性/);
+    assert.match(preview.aiInput, /qq_read_image/);
+    assert.match(preview.aiInput, /"images":\[/);
+    assert.doesNotMatch(preview.aiInput, /\[CQ:image/);
     assert.match(preview.extraSystemInstruction, /## Memories/);
     assert.match(preview.extraSystemInstruction, /## Memory Tool/);
 
@@ -113,6 +115,7 @@ test('runtime preview shows current @ text outranks an attached backend-log scre
 
     const declarations = tools.flatMap((tool: Record<string, any>) => tool.functionDeclarations || []);
     const names = declarations.map((item: Record<string, any>) => item.name).sort();
+    assert.ok(names.includes('qq_read_image'));
     assert.equal(names.includes('qq_search_chat_history'), false);
     assert.ok(names.includes('create_memory'));
     assert.ok(names.includes('edit_memory'));
@@ -123,8 +126,7 @@ test('runtime preview shows current @ text outranks an attached backend-log scre
     assert.match(last.parts[0].text, /sam最新动态/);
     assert.match(last.parts[0].text, /CURRENT_MESSAGE_JSON/);
     assert.match(last.parts[0].text, /"speaker_qq":3605900361/);
-    assert.equal(last.parts.length, 2, 'the screenshot should still be attached as image input');
-    assert.equal(last.parts[1].inline_data.mime_type, 'image/png');
+    assert.equal(last.parts.length, 1, 'group images should not be pre-attached as image input');
   });
 });
 
@@ -195,14 +197,14 @@ test('quoted link question does not attach unrelated recent group images', async
 
     assert.match(preview.aiInput, /QUOTED_MESSAGE_JSON/);
     assert.match(preview.aiInput, /BV1smKX6kED6/);
-    assert.doesNotMatch(preview.aiInput, /recent_group_message_image/);
+    assert.doesNotMatch(preview.aiInput, /RECENT_IMAGE_ATTACHMENTS_JSONL/);
 
     const last = preview.requestBody.contents.at(-1);
     assert.equal(last.parts.length, 1, 'unrelated recent images should stay out of visual input');
   });
 });
 
-test('image question exposes recent images as model-chosen visual candidates', async () => {
+test('image question exposes recent images as readable references without pre-attaching them', async () => {
   await withImageServer(async (imageUrl) => {
     addMessage({
       post_type: 'message',
@@ -225,12 +227,11 @@ test('image question exposes recent images as model-chosen visual candidates', a
       cfg: makeConfig(),
     });
 
-    assert.match(preview.aiInput, /RECENT_IMAGE_ATTACHMENTS_JSONL/);
     assert.match(preview.aiInput, /"message_id":9101/);
+    assert.match(preview.aiInput, /"images":\[/);
 
     const last = preview.requestBody.contents.at(-1);
-    assert.equal(last.parts.length, 2, 'the recent image candidate should be attached once');
-    assert.equal(last.parts[1].inline_data.mime_type, 'image/png');
+    assert.equal(last.parts.length, 1, 'recent images should only be attached after qq_read_image is called');
   });
 });
 

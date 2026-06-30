@@ -9,7 +9,7 @@
 // - 思考控制：generationConfig.thinkingConfig.thinkingBudget
 // - Google Search：tools: [{ googleSearch: {} }]
 // - URL Context：tools: [{ urlContext: {} }]
-// - 识图：解析 QQ [CQ:image,...url=...]，下载后作为 inline_data 发给 Gemini
+// - 识图：默认解析 QQ [CQ:image,...url=...]，也支持工具结果按需追加 inline_data
 
 import type { ImageCacheEntry, ImageRecord } from './image-cache';
 
@@ -24,6 +24,7 @@ const DEFAULT_MAX_FUNCTION_CALLS_PER_ROUND = 3;
 const DEFAULT_MAX_HTTP_RETRIES = 3;
 const DEFAULT_HTTP_RETRY_BASE_DELAY_MS = 1000;
 const MAX_HTTP_RETRY_DELAY_MS = 8000;
+const INTERNAL_INLINE_PARTS_FIELD = '__ai_inline_parts';
 
 type Role = 'user' | 'model';
 
@@ -92,6 +93,7 @@ type ChatOptions = {
   maxCallsPerRound?: number;
   maxHttpRetries?: number;
   httpRetryBaseDelayMs?: number;
+  autoAttachImages?: boolean;
 };
 
 function errorMessage(error: unknown): string {
@@ -208,13 +210,18 @@ async function imageRecordToPart(record: ImageRecord): Promise<InlineDataPart | 
   return record.url ? imageUrlToPart(record.url) : null;
 }
 
-async function buildCurrentUserParts(userMessage: unknown, cfg: AiConfig = {}): Promise<ContentPart[]> {
+async function buildCurrentUserParts(
+  userMessage: unknown,
+  cfg: AiConfig = {},
+  options: ChatOptions = {}
+): Promise<ContentPart[]> {
   const imageRecords = imageCache.extractImageRecords(userMessage, {
     ignoreStickers: cfg.ai_filter_stickers !== false,
     maxImages: MAX_IMAGES_PER_MESSAGE,
   });
   const text = stripCqCodes(userMessage) || (imageRecords.length ? '请分析这张图片。' : String(userMessage || ''));
   const parts: ContentPart[] = [{ text }];
+  if (options.autoAttachImages === false) return parts;
 
   for (const record of imageRecords) {
     const part = await imageRecordToPart(record);
@@ -224,7 +231,12 @@ async function buildCurrentUserParts(userMessage: unknown, cfg: AiConfig = {}): 
   return parts;
 }
 
-async function buildContents(userMessage: unknown, history: unknown, cfg: AiConfig = {}): Promise<GeminiContent[]> {
+async function buildContents(
+  userMessage: unknown,
+  history: unknown,
+  cfg: AiConfig = {},
+  options: ChatOptions = {}
+): Promise<GeminiContent[]> {
   const safeHistory = Array.isArray(history) ? history : [];
   const contents = safeHistory
     .filter((m): m is HistoryItem => Boolean(m && (m.role === 'user' || m.role === 'model') && m.text))
@@ -235,7 +247,7 @@ async function buildContents(userMessage: unknown, history: unknown, cfg: AiConf
 
   contents.push({
     role: 'user',
-    parts: await buildCurrentUserParts(userMessage, cfg),
+    parts: await buildCurrentUserParts(userMessage, cfg, options),
   });
 
   return contents;
@@ -273,13 +285,31 @@ function extractFunctionCalls(data: GeminiResponse): GeminiFunctionCall[] {
     .map((part) => part.functionCall);
 }
 
-function buildFunctionResponseParts(results: ToolResult[]): FunctionResponsePart[] {
-  return results.map((item) => ({
-    functionResponse: {
-      name: item.name,
-      response: item.response,
-    },
-  }));
+function splitToolResponse(response: any): { publicResponse: any; inlineParts: InlineDataPart[] } {
+  const inlineParts = Array.isArray(response?.[INTERNAL_INLINE_PARTS_FIELD])
+    ? response[INTERNAL_INLINE_PARTS_FIELD].filter((part: any): part is InlineDataPart => Boolean(part?.inline_data?.data))
+    : [];
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    return { publicResponse: response, inlineParts };
+  }
+
+  const { [INTERNAL_INLINE_PARTS_FIELD]: _hidden, ...publicResponse } = response;
+  return { publicResponse, inlineParts };
+}
+
+function buildFunctionResponseParts(results: ToolResult[]): ContentPart[] {
+  const parts: ContentPart[] = [];
+  for (const item of results) {
+    const { publicResponse, inlineParts } = splitToolResponse(item.response);
+    parts.push({
+      functionResponse: {
+        name: item.name,
+        response: publicResponse,
+      },
+    });
+    parts.push(...inlineParts);
+  }
+  return parts;
 }
 
 function extractOutputText(data: GeminiResponse): string {
@@ -317,7 +347,7 @@ async function buildRequestBody(
 ): Promise<GeminiRequestBody> {
   const systemPrompt = cfg?.ai_system_prompt || '';
   const body: GeminiRequestBody = {
-    contents: await buildContents(userMessage, history, cfg),
+    contents: await buildContents(userMessage, history, cfg, options),
   };
 
   const systemInstruction = buildSystemInstruction(systemPrompt, options.extraSystemInstruction);
