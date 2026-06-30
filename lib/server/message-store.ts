@@ -1,4 +1,4 @@
-// 消息存储 —— 持久化 OneBot 事件消息，供面板查看和 AI 检索
+// 消息存储 —— 持久化 OneBot 事件消息，供面板查看和群聊上下文构建
 
 const { MESSAGES_FILE } = require('./paths') as { MESSAGES_FILE: string };
 const { readJsonFile, writeJsonFileAtomic } = require('./json-store') as {

@@ -136,6 +136,27 @@ function getEventSenderName(event: OneBotEvent): string | number {
   return formatSender(sender, event?.user_id || '未知用户');
 }
 
+function promptJson(value: Record<string, any>): string {
+  return JSON.stringify(value);
+}
+
+function buildContextMessageRecord(
+  message: Record<string, any>,
+  selfId: number | string | null | undefined,
+  extra: Record<string, any> = {}
+): Record<string, any> {
+  const raw = String(message.raw_message || '');
+  return {
+    message_id: message.message_id ?? null,
+    time: message.time || null,
+    speaker_qq: message.user_id ?? null,
+    speaker_name: message.group_name || message.nickname || String(message.user_id || '未知用户'),
+    directed_to_bot: isBotMentionedRaw(raw, selfId),
+    text: summarizeRawMessage(raw, selfId).slice(0, 500),
+    ...extra,
+  };
+}
+
 function getCurrentHourText() {
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
@@ -183,7 +204,7 @@ function buildMemorySystemPrompt(conversationKey: string): string {
 - ...
 请主动调用工具记录，而不是需要用户要求。
 记忆如果包含日期信息，请包含在内，请使用绝对时间格式，并且当前时间是${currentHour}。
-无需告知用户你已更改记忆记录，也不要在对话中直接显示记忆内容，除非用户主动要求。
+**绝对不要**在回复中提及记忆操作，例如"已帮你记下来了""我已经记住了""已更新记录"之类的话一律不能说，也不要在对话中直接显示记忆内容，除非用户主动要求查看。记忆工具调用必须完全静默，对用户不可见。
 相似或相关的记忆应合并为一条记录，而不要重复记录，过时记录应删除。
 你可以在和用户闲聊的时候暗示用户你能记住东西。
 `);
@@ -735,9 +756,17 @@ async function buildQuotedMessageContext(
     return '';
   }
 
-  // 如果引用消息本身带图，把原 CQ:image 保留在这一段里，ai.ts 会提取图片并作为 inline_data 发送。
-  const imagePart = /\[CQ:image,/.test(raw) ? `\n引用消息原始图片：${raw}` : '';
-  return `重点引用消息：\n消息ID=${replyId} ${senderName}：${summary}${imagePart}`;
+  const record = {
+    message_id: replyId,
+    speaker_qq: data.user_id ?? null,
+    speaker_name: senderName,
+    text: summary,
+    image_cq: /\[CQ:image,/.test(raw) ? raw : null,
+  };
+  return [
+    'QUOTED_MESSAGE_JSON（当前消息直接引用的重点消息；speaker_* 是被引用消息的发言人）:',
+    promptJson(record),
+  ].join('\n');
 }
 
 async function buildMentionedMembersContext(event: OneBotEvent, client: OneBotClient): Promise<string> {
@@ -755,12 +784,16 @@ async function buildMentionedMembersContext(event: OneBotEvent, client: OneBotCl
       : null;
     if (result?.status === 'ok' && result.data) {
       const name = formatSender(result.data.sender || result.data, id);
-      lines.push(`QQ=${id} ${name} 身份=${roleLabel(result.data.role || 'unknown')}`);
+      lines.push(promptJson({
+        member_qq: id,
+        member_name: name,
+        role: roleLabel(result.data.role || 'unknown'),
+      }));
     } else {
-      lines.push(`QQ=${id}`);
+      lines.push(promptJson({ member_qq: id }));
     }
   }
-  return `当前消息额外 @ 到的群成员（通常就是用户要求操作/询问的对象）：\n${lines.join('\n')}`;
+  return `MENTIONED_MEMBERS_JSONL（当前消息额外 @ 到的群成员，通常是用户要求操作/询问的对象）:\n${lines.join('\n')}`;
 }
 
 async function buildRecentGroupContext(
@@ -783,18 +816,20 @@ async function buildRecentGroupContext(
   const lines: string[] = [];
   let resolvedReplyCount = 0;
   for (const m of messages) {
-    const time = formatTime(m.time);
-    const name = m.group_name || m.nickname || String(m.user_id || '未知用户');
     const raw = String(m.raw_message || '');
-    const text = summarizeRawMessage(raw, event.self_id).slice(0, 300);
-    const directedToBot = isBotMentionedRaw(raw, event.self_id) ? ' 对Bot说' : '';
-    const line = `[${time}] 消息ID=${m.message_id} QQ=${m.user_id} ${name}${directedToBot}：${text}`;
-    lines.push(line);
+    lines.push(promptJson(buildContextMessageRecord(m, event.self_id, {
+      time: formatTime(m.time),
+      record_type: 'recent_group_message',
+    })));
 
     // 普通图片要把原始 CQ 码也带给 ai.ts，后者会提取 URL 并转成 Gemini inline_data。
     // 表情包已在上面的 filter 中跳过，不会走到这里。
     if (/\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw)) {
-      lines.push(`该消息图片原始：${raw}`);
+      lines.push(promptJson({
+        record_type: 'recent_group_message_image',
+        source_message_id: m.message_id ?? null,
+        image_cq: raw,
+      }));
     }
 
     // 历史聊天里有人“引用了一条图片消息”时，当前消息本身只有 [CQ:reply]，图片在被引用消息里。
@@ -806,17 +841,28 @@ async function buildRecentGroupContext(
         ? (result.data?.raw_message || String(result.data?.message || ''))
         : '';
       if (quotedRaw && !(cfg.ai_filter_stickers !== false && ai.isStickerMessage(quotedRaw))) {
-        const quotedSender = formatSender(result.data?.sender || {}, result.data?.user_id);
-        lines.push(`该消息引用：消息ID=${replyId} ${quotedSender}：${summarizeRawMessage(quotedRaw, event.self_id).slice(0, 300)}`);
+        lines.push(promptJson({
+          record_type: 'quoted_message_for_recent_group_message',
+          source_message_id: m.message_id ?? null,
+          quoted_message_id: replyId,
+          quoted_speaker_qq: result.data?.user_id ?? null,
+          quoted_speaker_name: formatSender(result.data?.sender || {}, result.data?.user_id),
+          quoted_text: summarizeRawMessage(quotedRaw, event.self_id).slice(0, 500),
+        }));
         if (/\[CQ:image,/.test(quotedRaw) && !ai.isStickerMessage(quotedRaw)) {
-          lines.push(`引用图片原始：${quotedRaw}`);
+          lines.push(promptJson({
+            record_type: 'quoted_message_image_for_recent_group_message',
+            source_message_id: m.message_id ?? null,
+            quoted_message_id: replyId,
+            image_cq: quotedRaw,
+          }));
         }
         resolvedReplyCount += 1;
       }
     }
   }
 
-  return `最近群聊消息：\n${lines.join('\n')}`;
+  return `RECENT_GROUP_MESSAGES_JSONL（按时间从旧到新；每行一条记录；speaker_qq/speaker_name 永远表示该行消息的发言人）:\n${lines.join('\n')}`;
 }
 
 function findRecentUnansweredBotMention(event: OneBotEvent, cfg: BotConfig): Record<string, any> | null {
@@ -846,15 +892,15 @@ function buildPendingBotMentionContext(event: OneBotEvent, cfg: BotConfig): stri
   if (!isOnlyBotMentionMessage(event.raw_message || '', event.self_id)) return '';
   const pending = findRecentUnansweredBotMention(event, cfg);
   if (!pending) return '';
-  const time = formatTime(pending.time);
-  const name = pending.nickname || String(pending.user_id || '未知用户');
   const raw = String(pending.raw_message || '');
-  const text = summarizeRawMessage(raw, event.self_id).slice(0, 500);
-  const imagePart = /\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw)
-    ? `\n该未回答请求包含图片原始：${raw}`
-    : '';
-  return '当前用户这次只 @ 了 Bot，没有写新问题。请优先判断他是不是在催促你继续处理最近一次未回答的 @Bot 请求：\n' +
-    `[${time}] 消息ID=${pending.message_id} QQ=${pending.user_id} ${name} 对Bot说：${text}${imagePart}`;
+  const record = buildContextMessageRecord(pending, event.self_id, {
+    time: formatTime(pending.time),
+    image_cq: /\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw) ? raw : null,
+  });
+  return [
+    'PENDING_UNANSWERED_BOT_MENTION_JSON（当前用户本次只 @Bot 且没有新问题时，用它判断是否在催促上一次未回答请求）:',
+    promptJson(record),
+  ].join('\n');
 }
 
 async function buildGroupAwarePrompt(
@@ -867,7 +913,18 @@ async function buildGroupAwarePrompt(
   if (!event.group_id || !cfg.ai_group_context_enabled) return currentMsg;
 
   const sections = [
-    '以下是当前 QQ 群聊上下文，仅用于理解用户这次 @Bot 的问题。当前用户这次明确输入的文字指令优先级最高；同条消息里的图片、引用消息和最近群聊上下文只作为辅助材料。除非用户明确说“看图/图里/截图/这张图/识别图片/日志怎么了”等，否则不要因为同条消息里的图片内容而偏离当前文字指令。不要主动复述上下文；如果上下文不足，不要硬猜，先判断缺的是什么。最近群聊消息里带有“消息ID=数字”和“QQ=数字”；如果某条消息是发给你的，会标成“对Bot说”，@ 信息会保留成 @Bot 或 @QQ=数字。如果缺的是外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格/版本/状态等实时信息，并且联网工具可用，可以使用联网搜索或 URL 上下文。普通闲聊、能从当前消息、引用消息和近期上下文直接回答的问题，不要为了显得认真而检索或联网。只有当用户明确要求引用、回复、评价某个人/某条消息，或问题里明显用“他/她/那条/上面那条”指向某条上文时，才选择消息ID，并在最终回复第一行输出“引用消息ID：数字”，第二行开始写正文。普通追问、继续、还有吗、闲聊时不要输出引用消息ID。这个标记是给系统看的，不要解释。',
+    [
+      'GROUP_CONTEXT_RULES:',
+      '- 只回答 CURRENT_MESSAGE_JSON 里的当前用户本条消息；它的 speaker_qq/speaker_name 是当前提问者',
+      '- RECENT_GROUP_MESSAGES_JSONL 只是背景；每行的 speaker_qq/speaker_name 只属于该行消息，不要当成当前提问者',
+      '- 如果 CURRENT_MESSAGE_JSON 和历史上下文冲突，以 CURRENT_MESSAGE_JSON 为准',
+      '- 如果用户问“谁说的/他说的/那条/上面那条”，先用 message_id、speaker_qq、speaker_name 判断指向，不确定就说明不确定',
+      '- 除非用户明确说看图、截图、图片、日志图，否则同条消息里的图片只作辅助，不要盖过当前文字',
+      '- 普通闲聊、接话、评价上文，优先基于当前消息、引用消息和最近上下文直接回答',
+      '- 需要外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格、版本或状态时，联网工具可用再查证',
+      '- 只有用户明确要求引用/回复/评价某条消息，或明显用“他/她/那条/上面那条”指向某条上文时，才在最终回复第一行输出“引用消息ID：数字”',
+      '- 普通追问、继续、还有吗、闲聊时不要输出引用消息ID',
+    ].join('\n'),
   ];
 
   if (managementContext) {
@@ -899,7 +956,15 @@ async function buildGroupAwarePrompt(
   const recent = await buildRecentGroupContext(event, client, cfg);
   if (recent) sections.push(recent);
 
-  sections.push(`当前用户消息：\n${annotateAtMentions(currentMsg, event.self_id)}`);
+  sections.push([
+    'CURRENT_MESSAGE_JSON（最高优先级；speaker_* 是当前提问者）:',
+    promptJson({
+      message_id: event.message_id ?? null,
+      speaker_qq: event.user_id ?? null,
+      speaker_name: getEventSenderName(event),
+      text: annotateAtMentions(currentMsg, event.self_id),
+    }),
+  ].join('\n'));
   return sections.join('\n\n');
 }
 

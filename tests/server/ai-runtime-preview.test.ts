@@ -92,8 +92,9 @@ test('runtime preview shows current @ text outranks an attached backend-log scre
 
     assert.equal(preview.conversationKey, 'group:424242424');
     assert.match(preview.aiInput, /sam最新动态/);
-    assert.match(preview.aiInput, /当前用户这次明确输入的文字指令优先级最高/);
-    assert.match(preview.aiInput, /不要因为同条消息里的图片/);
+    assert.match(preview.aiInput, /CURRENT_MESSAGE_JSON/);
+    assert.match(preview.aiInput, /speaker_qq/);
+    assert.match(preview.aiInput, /同条消息里的图片只作辅助/);
     assert.match(preview.extraSystemInstruction, /## Memories/);
     assert.match(preview.extraSystemInstruction, /## Memory Tool/);
 
@@ -112,7 +113,8 @@ test('runtime preview shows current @ text outranks an attached backend-log scre
     const last = preview.requestBody.contents.at(-1);
     assert.equal(last.role, 'user');
     assert.match(last.parts[0].text, /sam最新动态/);
-    assert.match(last.parts[0].text, /当前用户这次明确输入的文字指令优先级最高/);
+    assert.match(last.parts[0].text, /CURRENT_MESSAGE_JSON/);
+    assert.match(last.parts[0].text, /"speaker_qq":3605900361/);
     assert.equal(last.parts.length, 2, 'the screenshot should still be attached as image input');
     assert.equal(last.parts[1].inline_data.mime_type, 'image/png');
   });
