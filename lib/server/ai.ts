@@ -25,6 +25,16 @@ const DEFAULT_MAX_HTTP_RETRIES = 3;
 const DEFAULT_HTTP_RETRY_BASE_DELAY_MS = 1000;
 const MAX_HTTP_RETRY_DELAY_MS = 8000;
 const INTERNAL_INLINE_PARTS_FIELD = '__ai_inline_parts';
+const NO_THOUGHT_LEAK_SYSTEM_INSTRUCTION = [
+  '最终回复只能包含要发给 QQ 用户的自然语言正文。',
+  '不要输出思维链、推理过程、内部草稿、隐藏分析、工具过程或调试标签。',
+  '不要输出 _thought、thought、thinking、analysis、reasoning、scratchpad、<think>、<analysis>、```thought 这类字段或标记。',
+].join('\n');
+const THOUGHT_LEAK_REPAIR_PROMPT = [
+  '上一条候选回复包含内部草稿或思维链，已被系统拦截。',
+  '请重新回答当前用户，只输出最终自然回复正文。',
+  '不要输出 _thought、thinking、analysis、reasoning、思考过程、草稿或任何内部标签。',
+].join('\n');
 
 type Role = 'user' | 'model';
 
@@ -120,6 +130,7 @@ function getBeijingTimeText(): string {
 function buildSystemInstruction(systemPrompt: unknown, extraSystemInstruction: unknown = ''): string {
   return [
     getBeijingTimeText(),
+    NO_THOUGHT_LEAK_SYSTEM_INSTRUCTION,
     String(systemPrompt || '').trim(),
     String(extraSystemInstruction || '').trim(),
   ].filter(Boolean).join('\n');
@@ -319,6 +330,84 @@ function extractOutputText(data: GeminiResponse): string {
     .map((part) => part.text)
     .join('')
     .trim();
+}
+
+type SanitizedReply = {
+  text: string;
+  leaked: boolean;
+  blocked: boolean;
+  reason: string;
+};
+
+function extractAfterFinalMarker(text: string): string {
+  const match = text.match(
+    /(?:^|\n)\s*(?:final(?:\s+answer)?|final|最终(?:回复|回答|答案)|给用户的(?:回复|回答)|正文|回答)[:：]?\s*\n([\s\S]+)$/i
+  );
+  return match ? match[1].trim() : '';
+}
+
+function stripDelimitedThoughts(text: string): { text: string; changed: boolean } {
+  let changed = false;
+  let next = text.replace(
+    /<\s*(think|thought|thinking|analysis|reasoning|scratchpad)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi,
+    () => {
+      changed = true;
+      return '';
+    }
+  );
+  next = next.replace(
+    /```(?:thought|thinking|analysis|reasoning|scratchpad)[\s\S]*?```/gi,
+    () => {
+      changed = true;
+      return '';
+    }
+  );
+  return { text: next.trim(), changed };
+}
+
+function startsWithThoughtLabel(text: string): boolean {
+  return /^\s*[_#*\-\s]*(?:thought|thinking|analysis|reasoning|scratchpad|chain[-_\s]*of[-_\s]*thought|思维链|思考过程|思考|推理|草稿)(?:\s*[:：]|\s|$)/i
+    .test(text);
+}
+
+function containsThoughtLine(text: string): boolean {
+  return /(?:^|\n)\s*[_#*\-\s]*(?:thought|thinking|analysis|reasoning|scratchpad|chain[-_\s]*of[-_\s]*thought|思维链|思考过程|思考|推理|草稿)(?:\s*[:：]|\s|$)/i
+    .test(text);
+}
+
+function sanitizeModelReply(raw: unknown): SanitizedReply {
+  const original = String(raw || '').trim();
+  if (!original) return { text: '', leaked: false, blocked: false, reason: '' };
+
+  const stripped = stripDelimitedThoughts(original);
+  const text = stripped.text;
+  if (!text) {
+    return {
+      text: '',
+      leaked: stripped.changed,
+      blocked: stripped.changed,
+      reason: 'delimited_thought_only',
+    };
+  }
+
+  const finalText = extractAfterFinalMarker(text);
+  if (startsWithThoughtLabel(text)) {
+    return finalText
+      ? { text: finalText, leaked: true, blocked: false, reason: 'leading_thought_with_final_marker' }
+      : { text: '', leaked: true, blocked: true, reason: 'leading_thought_label' };
+  }
+
+  if (containsThoughtLine(text)) {
+    return finalText
+      ? { text: finalText, leaked: true, blocked: false, reason: 'thought_line_with_final_marker' }
+      : { text: '', leaked: true, blocked: true, reason: 'thought_line' };
+  }
+
+  if (stripped.changed) {
+    return { text, leaked: true, blocked: false, reason: 'delimited_thought_removed' };
+  }
+
+  return { text, leaked: false, blocked: false, reason: '' };
 }
 
 function stableStringify(value: unknown): string {
@@ -548,6 +637,7 @@ async function chat(
   const seenToolCalls = new Set();
   const allToolResults: ToolResult[] = [];
   let executedToolCalls = 0;
+  let thoughtLeakRepairCount = 0;
   const requestStartedAt = Date.now();
 
   console.log(
@@ -599,12 +689,36 @@ async function chat(
 
       const data = await resp.json() as GeminiResponse;
       const functionCalls = extractFunctionCalls(data);
-      const reply = extractOutputText(data);
+      const rawReply = extractOutputText(data);
+      const sanitizedReply = sanitizeModelReply(rawReply);
+      const reply = sanitizedReply.text;
       const responseMetadata = summarizeResponseMetadata(data);
       if (responseMetadata) {
         console.log(`[ToolAudit] builtin_metadata round=${round} ${compactJson(responseMetadata)}`);
       }
       if (functionCalls.length === 0 || typeof options.executeFunctionCall !== 'function') {
+        if (sanitizedReply.leaked) {
+          console.warn(
+            `[AI] Gemini 回复包含内部思考标记 reason=${sanitizedReply.reason} ` +
+            `blocked=${sanitizedReply.blocked} round=${round}`
+          );
+        }
+        if (sanitizedReply.blocked) {
+          if (thoughtLeakRepairCount < 1 && round <= maxToolRounds) {
+            thoughtLeakRepairCount += 1;
+            body.contents = [
+              ...body.contents,
+              {
+                role: 'user',
+                parts: [{ text: THOUGHT_LEAK_REPAIR_PROMPT }],
+              },
+            ];
+            console.warn(`[AI] Gemini 内部思考泄漏已拦截，重试生成最终回复 round=${round}`);
+            continue;
+          }
+          console.warn(`[AI] Gemini 内部思考泄漏重试耗尽，本次不回复 round=${round}`);
+          return null;
+        }
         if (reply) {
           console.log(
             `[AI] Gemini 回复完成 duration_ms=${Date.now() - requestStartedAt} rounds=${round} ` +
@@ -622,7 +736,7 @@ async function chat(
 
       if (round > maxToolRounds || executedToolCalls >= maxToolCalls) {
         console.warn(`[AI] 工具调用达到限制 round=${round} executed=${executedToolCalls}`);
-        return reply || fallbackToolMessages(allToolResults);
+        return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
       }
 
       const roundToolResults: ToolResult[] = [];
@@ -663,12 +777,12 @@ async function chat(
 
       if (roundToolResults.length === 0) {
         console.warn('[AI] 模型请求工具但没有可执行调用，停止工具循环');
-        return reply || fallbackToolMessages(allToolResults);
+        return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
       }
 
       if (!data.candidates?.[0]?.content) {
         console.warn('[AI] 模型请求工具但缺少候选内容，停止工具循环');
-        return reply || fallbackToolMessages(allToolResults);
+        return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
       }
 
       body.contents = [

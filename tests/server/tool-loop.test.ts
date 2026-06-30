@@ -179,6 +179,44 @@ test('chat appends tool-provided image parts only after the model asks for an im
   }
 });
 
+test('chat blocks leaked thought text and retries once for a clean reply', async () => {
+  const oldFetch = global.fetch;
+  const requests: any[] = [];
+  const responses = [
+    textReply('_thought\n我先分析内部过程\n最终可能是这个意思'),
+    textReply('这是在玩“不交代上下文让 AI 猜”的梗'),
+  ];
+  global.fetch = (async (_url: any, init: any) => {
+    requests.push(JSON.parse(init.body));
+    return jsonResponse(responses.shift()!);
+  }) as any;
+
+  try {
+    const reply = await ai.chat('你发 2 个 0 是啥意思', [], makeCfg());
+
+    assert.equal(reply, '这是在玩“不交代上下文让 AI 猜”的梗');
+    assert.equal(requests.length, 2);
+    assert.match(requests[1].contents.at(-1).parts[0].text, /内部草稿或思维链/);
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
+test('chat strips delimited think blocks from otherwise clean replies', async () => {
+  const oldFetch = global.fetch;
+  global.fetch = (async () => {
+    return jsonResponse(textReply('<think>这里是内部推理</think>可以，刚才那句是模型抽风了'));
+  }) as any;
+
+  try {
+    const reply = await ai.chat('刚才怎么回事', [], makeCfg());
+
+    assert.equal(reply, '可以，刚才那句是模型抽风了');
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
 test('chat retries retryable Gemini HTTP errors before replying', async () => {
   const oldFetch = global.fetch;
   let attempts = 0;
