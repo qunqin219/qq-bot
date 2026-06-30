@@ -352,18 +352,9 @@ function isCommandContextMessage(raw: unknown, prefix = '/'): boolean {
   );
 }
 
-function currentQuestionExplicitlyTargetsRecentImage(raw: unknown): boolean {
-  if (extractReplyMessageId(raw)) return false;
-  if (/\[CQ:image,/.test(String(raw || ''))) return false;
-  const text = ai.stripCqCodes(raw).trim();
-  return /图片|截图|照片|图里|图中|这张|那张|上图|上面.*图|刚才.*图|看图|看下图/.test(text);
-}
-
-function getContextCutoffTime(event: OneBotEvent): number {
-  const currentStored = getMessages(200, null, event.group_id || null)
-    .find((m) => m.message_id === event.message_id);
-  const ts = currentStored ? Date.parse(String(currentStored.time || '')) : Date.now();
-  return Number.isFinite(ts) ? ts : Date.now();
+function isRegularImageMessage(message: Record<string, any>): boolean {
+  const raw = String(message.raw_message || '');
+  return /\[CQ:image,/.test(raw) && !ai.isStickerMessage(raw);
 }
 
 function formatTime(iso: unknown): string {
@@ -871,14 +862,8 @@ async function buildRecentGroupContext(
 ): Promise<string> {
   if (!cfg.ai_group_context_enabled || !event.group_id) return '';
   const limit = Math.max(1, Math.min(50, Number(cfg.ai_group_context_messages || 20)));
-  const scanLimit = Math.max(limit + 12, Math.min(500, limit * 4 + 50));
-  const cutoffTime = getContextCutoffTime(event);
-  const messagesLatestFirst = getMessages(scanLimit, null, event.group_id)
+  const messagesLatestFirst = getMessages(limit + 12, null, event.group_id)
     .filter((m) => m.message_id !== event.message_id)
-    .filter((m) => {
-      const ts = Date.parse(String(m.time || ''));
-      return !Number.isFinite(ts) || ts <= cutoffTime;
-    })
     .filter((m) => !(cfg.ai_group_context_exclude_bot && m.user_id === event.self_id))
     .filter((m) => !(cfg.ai_filter_stickers !== false && ai.isStickerMessage(m.raw_message)))
     .filter((m) => !isCommandContextMessage(m.raw_message, cfg.command_prefix || '/'))
@@ -887,16 +872,22 @@ async function buildRecentGroupContext(
 
   if (!messages.length) return '';
 
-  const attachRecentImage = currentQuestionExplicitlyTargetsRecentImage(event.raw_message || '');
-  const recentImageSource = attachRecentImage
-    ? messagesLatestFirst.find((m) => /\[CQ:image,/.test(String(m.raw_message || '')) && !ai.isStickerMessage(m.raw_message))
-    : null;
-  const recentImageSourceId = recentImageSource?.message_id !== undefined && recentImageSource?.message_id !== null
-    ? String(recentImageSource.message_id)
-    : null;
+  const shouldAttachRecentImages = !extractReplyMessageId(event.raw_message || '') &&
+    !/\[CQ:image,/.test(String(event.raw_message || ''));
+  const recentImageAttachments = shouldAttachRecentImages
+    ? messagesLatestFirst.filter(isRegularImageMessage).slice(0, 3).reverse()
+    : [];
+  const imageAttachmentLines = recentImageAttachments.map((m, index) => promptJson({
+    visual_index: index + 1,
+    message_id: m.message_id ?? null,
+    time: formatTime(m.time),
+    speaker_qq: m.user_id ?? null,
+    speaker_name: m.group_name || m.nickname || String(m.user_id || '未知用户'),
+    text: summarizeRawMessage(m.raw_message, event.self_id).slice(0, 500),
+    image_cq: m.raw_message,
+  }));
   const lines: string[] = [];
   let resolvedReplyCount = 0;
-  let attachedRecentImageCount = 0;
   for (const m of messages) {
     const raw = String(m.raw_message || '');
     lines.push(promptJson(buildContextMessageRecord(m, event.self_id, {
@@ -904,23 +895,8 @@ async function buildRecentGroupContext(
       record_type: 'recent_group_message',
     })));
 
-    // 最近图片默认只作为文字背景，避免污染“当前消息/引用消息”的视觉输入。
-    // 只有用户明确问上图/截图/这张图时，才附带最近的一张普通图片。
-    if (
-      recentImageSourceId &&
-      String(m.message_id) === recentImageSourceId &&
-      attachedRecentImageCount < 1
-    ) {
-      lines.push(promptJson({
-        record_type: 'recent_group_message_image',
-        source_message_id: m.message_id ?? null,
-        image_cq: raw,
-      }));
-      attachedRecentImageCount += 1;
-    }
-
     // 历史聊天里有人“引用了一条图片消息”时，当前消息本身只有 [CQ:reply]，图片在被引用消息里。
-    // 这里少量解析最近的引用消息，避免用户稍后 @Bot 时看不到被引用图片。
+    // 这里仅把被引用消息做成文字摘要；视觉输入统一走 RECENT_IMAGE_ATTACHMENTS_JSONL。
     const replyId = extractReplyMessageId(raw);
     if (replyId && client?.getMsg && cfg.ai_group_context_include_quote && resolvedReplyCount < 5) {
       const result = await client.getMsg(replyId);
@@ -936,26 +912,17 @@ async function buildRecentGroupContext(
           quoted_speaker_name: formatSender(result.data?.sender || {}, result.data?.user_id),
           quoted_text: summarizeRawMessage(quotedRaw, event.self_id).slice(0, 500),
         }));
-        if (
-          attachRecentImage &&
-          attachedRecentImageCount < 1 &&
-          /\[CQ:image,/.test(quotedRaw) &&
-          !ai.isStickerMessage(quotedRaw)
-        ) {
-          lines.push(promptJson({
-            record_type: 'quoted_message_image_for_recent_group_message',
-            source_message_id: m.message_id ?? null,
-            quoted_message_id: replyId,
-            image_cq: quotedRaw,
-          }));
-          attachedRecentImageCount += 1;
-        }
         resolvedReplyCount += 1;
       }
     }
   }
 
-  return `RECENT_GROUP_MESSAGES_JSONL（按时间从旧到新；每行一条记录；speaker_qq/speaker_name 永远表示该行消息的发言人）:\n${lines.join('\n')}`;
+  return [
+    imageAttachmentLines.length
+      ? `RECENT_IMAGE_ATTACHMENTS_JSONL（可选视觉附件；visual_index 对应随后的图片输入顺序；模型自行判断是否和当前问题有关，不相关就忽略）:\n${imageAttachmentLines.join('\n')}`
+      : '',
+    `RECENT_GROUP_MESSAGES_JSONL（按时间从旧到新；每行一条记录；speaker_qq/speaker_name 永远表示该行消息的发言人）:\n${lines.join('\n')}`,
+  ].filter(Boolean).join('\n\n');
 }
 
 function findRecentUnansweredBotMention(event: OneBotEvent, cfg: BotConfig): Record<string, any> | null {
@@ -1009,10 +976,12 @@ async function buildGroupAwarePrompt(
     [
       'GROUP_CONTEXT_RULES:',
       '- 只回答 CURRENT_MESSAGE_JSON 里的当前用户本条消息；它的 speaker_qq/speaker_name 是当前提问者',
+      '- 如果存在 QUOTED_MESSAGE_JSON，它是当前消息直接引用的重点对象；优先围绕它回答',
       '- RECENT_GROUP_MESSAGES_JSONL 只是背景；每行的 speaker_qq/speaker_name 只属于该行消息，不要当成当前提问者',
+      '- RECENT_IMAGE_ATTACHMENTS_JSONL 是最近群聊里的候选图片附件；是否相关由你根据当前问题、引用关系、时间线和发言人自行判断，不相关就忽略',
       '- 如果 CURRENT_MESSAGE_JSON 和历史上下文冲突，以 CURRENT_MESSAGE_JSON 为准',
       '- 如果用户问“谁说的/他说的/那条/上面那条”，先用 message_id、speaker_qq、speaker_name 判断指向，不确定就说明不确定',
-      '- 除非用户明确说看图、截图、图片、日志图，否则同条消息里的图片只作辅助，不要盖过当前文字',
+      '- 视觉输入来自当前消息、直接引用消息，或 RECENT_IMAGE_ATTACHMENTS_JSONL 里的候选图；候选图需要你判断相关性，不要因为看见图片就忽略当前文字/引用/链接',
       '- 普通闲聊、接话、评价上文，优先基于当前消息、引用消息和最近上下文直接回答',
       '- 需要外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格、版本或状态时，联网工具可用再查证',
       '- 只有用户明确要求引用/回复/评价某条消息，或明显用“他/她/那条/上面那条”指向某条上文时，才在最终回复第一行输出“引用消息ID：数字”',

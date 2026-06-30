@@ -102,7 +102,7 @@ test('runtime preview shows current @ text outranks an attached backend-log scre
     assert.match(preview.aiInput, /sam最新动态/);
     assert.match(preview.aiInput, /CURRENT_MESSAGE_JSON/);
     assert.match(preview.aiInput, /speaker_qq/);
-    assert.match(preview.aiInput, /同条消息里的图片只作辅助/);
+    assert.match(preview.aiInput, /候选图需要你判断相关性/);
     assert.match(preview.extraSystemInstruction, /## Memories/);
     assert.match(preview.extraSystemInstruction, /## Memory Tool/);
 
@@ -199,6 +199,38 @@ test('quoted link question does not attach unrelated recent group images', async
 
     const last = preview.requestBody.contents.at(-1);
     assert.equal(last.parts.length, 1, 'unrelated recent images should stay out of visual input');
+  });
+});
+
+test('image question exposes recent images as model-chosen visual candidates', async () => {
+  await withImageServer(async (imageUrl) => {
+    addMessage({
+      post_type: 'message',
+      message_type: 'group',
+      group_id: 515151515,
+      user_id: 2054323568,
+      message_id: 9101,
+      raw_message: `[CQ:image,file=target.png,url=${imageUrl}]`,
+      message: `[CQ:image,file=target.png,url=${imageUrl}]`,
+      sender: { nickname: 'momo' },
+    });
+
+    const preview = await botCore.buildAiRuntimePreview({
+      event: {
+        ...makeGroupEvent('[CQ:at,qq=1525899506] 这张图是什么意思'),
+        group_id: 515151515,
+        message_id: 9102,
+      },
+      client: makeClient(),
+      cfg: makeConfig(),
+    });
+
+    assert.match(preview.aiInput, /RECENT_IMAGE_ATTACHMENTS_JSONL/);
+    assert.match(preview.aiInput, /"message_id":9101/);
+
+    const last = preview.requestBody.contents.at(-1);
+    assert.equal(last.parts.length, 2, 'the recent image candidate should be attached once');
+    assert.equal(last.parts[1].inline_data.mime_type, 'image/png');
   });
 });
 
