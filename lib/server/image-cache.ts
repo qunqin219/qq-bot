@@ -20,6 +20,7 @@ const DEFAULT_ALLOWED_HOST_SUFFIXES = [
   'qpic.cn',
   'gtimg.cn',
   'qq.com',
+  'nt.qq.com.cn',
   'tencent.com',
   'myqcloud.com',
 ];
@@ -403,6 +404,7 @@ module.exports = {
   cacheKeyForRecord,
   getCachedImage,
   validateImageUrl,
+  hostMatchesAllowedSuffix,
   downloadImage,
   cacheImageRecord,
   cacheImagesFromMessage,

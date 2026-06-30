@@ -91,6 +91,60 @@ type AiRuntimePreviewInput = {
   cfg?: BotConfig;
 };
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function compactJson(value: unknown, maxLength = 900): string {
+  let text: string;
+  try {
+    text = JSON.stringify(value);
+  } catch {
+    text = String(value);
+  }
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function previewText(value: unknown, maxLength = 180): string {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function summarizeToolResult(result: Record<string, any> | null | undefined): Record<string, any> {
+  if (!result || typeof result !== 'object') return { ok: false, message: String(result || '') };
+  return {
+    ok: result.ok,
+    action: result.action,
+    message: result.message,
+    target_count: result.target_count,
+    success_count: result.success_count,
+    failed_count: result.failed_count,
+    returned_count: result.returned_count,
+  };
+}
+
+function summarizeOneBotResult(result: OneBotResult | null | undefined): Record<string, any> {
+  if (!result || typeof result !== 'object') return { status: 'unknown' };
+  return {
+    status: result.status || 'unknown',
+    wording: result.wording,
+    msg: result.msg,
+  };
+}
+
+function buildEnabledToolAuditList(cfg: BotConfig, functionDeclarations: Array<Record<string, any>> = []): string {
+  const names = functionDeclarations
+    .map((item) => item?.name)
+    .filter(Boolean);
+  if (cfg.ai_google_search_enabled === true) names.push('googleSearch');
+  if (cfg.ai_url_context_enabled === true) names.push('urlContext');
+  return names.length ? names.join(',') : '-';
+}
+
 function extractReplyMessageId(msg: unknown): string | null {
   const match = String(msg || '').match(/\[CQ:reply,id=([^\],]+)[^\]]*\]/);
   return match ? match[1] : null;
@@ -1050,10 +1104,14 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     }
   }
   const msgType = event.message_type || '';
-
-  console.log(`[BotCore] 收到消息: [${msgType}] user=${userId} msg=${msg.slice(0, 50)}`);
-
   const groupId = event.group_id;
+
+  console.log(
+    `[BotCore] 收到消息 type=${msgType || '-'} group=${groupId || '-'} user=${userId || '-'} ` +
+    `message_id=${event.message_id || '-'} sender=${previewText(getEventSenderName(event), 80) || '-'} ` +
+    `msg=${previewText(summarizeRawMessage(msg, event.self_id), 220) || '-'}`
+  );
+
   const selfId = String(event.self_id || '');
   const isMentioned = groupId ? msg.includes(`[CQ:at,qq=${selfId}]`) : false;
   const prefix = cfg.command_prefix || '/';
@@ -1090,7 +1148,7 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     groupId &&
     isMentioned &&
     !isCommand &&
-	    cfg.ai_allow_group_mention_from_non_admin === true;
+    cfg.ai_allow_group_mention_from_non_admin === true;
   if (!isAdmin && !allowGroupMentionFromNonAdmin) return;
 
   // 命令处理（非管理员命令在前面的权限检查中已经被拦截）
@@ -1123,31 +1181,53 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     aiInput,
   } = runtime;
 
+  const aiStartedAt = Date.now();
+  console.log(
+    `[AI] 回复开始 conversation=${conversationKey} type=${msgType || '-'} group=${groupId || '-'} user=${userId || '-'} ` +
+    `message_id=${event.message_id || '-'} sender=${previewText(getEventSenderName(event), 80) || '-'} ` +
+    `context_turns=${contextTurns} tools=${buildEnabledToolAuditList(cfg, functionDeclarations)} ` +
+    `input="${previewText(cleanMsg, 240)}"`
+  );
+
   let aiReply;
   try {
     aiReply = await ai.chat(aiInput, runtime.history, cfg, {
       functionDeclarations,
       extraSystemInstruction,
       executeFunctionCall: async (name: string, args: ToolArgs, meta: Record<string, any> = {}) => {
-        const roundLabel = meta.round ? ` round=${meta.round}` : '';
-        console.log(`[ToolCall]${roundLabel} ${name} args=${JSON.stringify(args || {})}`);
-        const result = await executeGroupManagementTool(name, args, {
-          event,
-          client,
-          cfg,
-          botRole,
-          requesterIsAdmin: isAdmin,
-        });
-        console.log(`[ToolResult]${roundLabel} ${name} ${JSON.stringify({
-          ok: result?.ok,
-          action: result?.action,
-          message: result?.message,
-          target_count: result?.target_count,
-          success_count: result?.success_count,
-          failed_count: result?.failed_count,
-          returned_count: result?.returned_count,
-        })}`);
-        return result;
+        const toolStartedAt = Date.now();
+        const round = meta.round || '-';
+        const index = meta.index || '-';
+        const auditId = [
+          event.message_id || Date.now(),
+          round !== '-' ? `r${round}` : null,
+          index !== '-' ? `i${index}` : null,
+          name,
+        ].filter(Boolean).join(':');
+        console.log(
+          `[ToolAudit] start id=${auditId} name=${name} round=${round} index=${index} ` +
+          `conversation=${conversationKey} group=${groupId || '-'} user=${userId || '-'} args=${compactJson(args || {})}`
+        );
+        try {
+          const result = await executeGroupManagementTool(name, args, {
+            event,
+            client,
+            cfg,
+            botRole,
+            requesterIsAdmin: isAdmin,
+          });
+          console.log(
+            `[ToolAudit] end id=${auditId} name=${name} duration_ms=${Date.now() - toolStartedAt} ` +
+            `result=${compactJson(summarizeToolResult(result))}`
+          );
+          return result;
+        } catch (e) {
+          console.error(
+            `[ToolAudit] error id=${auditId} name=${name} duration_ms=${Date.now() - toolStartedAt} ` +
+            `error=${errorMessage(e)}`
+          );
+          throw e;
+        }
       },
     });
   } catch (err) {
@@ -1155,14 +1235,32 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     return;
   }
 
-  if (!aiReply) return;
+  if (!aiReply) {
+    console.warn(
+      `[AI] 回复为空 conversation=${conversationKey} duration_ms=${Date.now() - aiStartedAt} ` +
+      `message_id=${event.message_id || '-'}`
+    );
+    return;
+  }
 
   const parsedReply = parseAiReplyDirective(aiReply);
   if (groupId && parsedReply.replyMessageId) {
     console.log(`[BotCore] 模型选择引用 message_id=${parsedReply.replyMessageId}`);
   }
   aiReply = parsedReply.text;
-  if (!aiReply) return;
+  if (!aiReply) {
+    console.warn(
+      `[AI] 回复解析后为空 conversation=${conversationKey} duration_ms=${Date.now() - aiStartedAt} ` +
+      `message_id=${event.message_id || '-'}`
+    );
+    return;
+  }
+
+  console.log(
+    `[AI] 回复生成完成 conversation=${conversationKey} duration_ms=${Date.now() - aiStartedAt} ` +
+    `reply_chars=${String(aiReply).length} quote_message_id=${parsedReply.replyMessageId || '-'} ` +
+    `reply_preview="${previewText(aiReply, 240)}"`
+  );
 
   const historyUserText = cleanMsg;
   const historyAssistantText = aiReply;
@@ -1172,9 +1270,20 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
   } : {});
 
   if (groupId) {
-    await client.sendGroupMsg!(groupId, buildGroupReplyMessage(event, cfg, aiReply, parsedReply.replyMessageId));
+    const outboundMessage = buildGroupReplyMessage(event, cfg, aiReply, parsedReply.replyMessageId);
+    console.log(
+      `[AI] 发送群回复 conversation=${conversationKey} group=${groupId} message_id=${event.message_id || '-'} ` +
+      `chars=${String(aiReply).length} quote_message_id=${parsedReply.replyMessageId || extractReplyMessageId(outboundMessage) || '-'}`
+    );
+    const sendResult = await client.sendGroupMsg!(groupId, outboundMessage);
+    console.log(`[AI] 群回复发送完成 conversation=${conversationKey} result=${compactJson(summarizeOneBotResult(sendResult))}`);
   } else {
-    await client.sendPrivateMsg!(userId as any, aiReply);
+    console.log(
+      `[AI] 发送私聊回复 conversation=${conversationKey} user=${userId || '-'} ` +
+      `message_id=${event.message_id || '-'} chars=${String(aiReply).length}`
+    );
+    const sendResult = await client.sendPrivateMsg!(userId as any, aiReply);
+    console.log(`[AI] 私聊回复发送完成 conversation=${conversationKey} result=${compactJson(summarizeOneBotResult(sendResult))}`);
   }
 }
 

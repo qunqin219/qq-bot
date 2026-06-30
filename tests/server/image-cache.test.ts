@@ -78,4 +78,9 @@ test('image URL validation blocks local addresses unless explicitly enabled', as
   }
 });
 
+test('default image allowlist includes NapCat QQ multimedia host', () => {
+  assert.equal(imageCache.hostMatchesAllowedSuffix('multimedia.nt.qq.com.cn'), true);
+  assert.equal(imageCache.hostMatchesAllowedSuffix('evil-nt.qq.com.cn.example.com'), false);
+});
+
 export {};

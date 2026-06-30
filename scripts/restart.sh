@@ -21,9 +21,10 @@ start_bot() {
   fi
   mkdir -p "$LOG_DIR"
   cd "$ROOT_DIR"
-  nohup pnpm exec tsx lib/server/index.ts >> "$LOG_FILE" 2>&1 &
+  nohup pnpm exec tsx lib/server/index.ts >/dev/null 2>&1 &
   echo "$!" > "$PID_FILE"
   echo "qq-bot started: $(cat "$PID_FILE")"
+  echo "logs: $LOG_FILE"
 }
 
 stop_bot() {

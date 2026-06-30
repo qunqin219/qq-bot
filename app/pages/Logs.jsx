@@ -16,8 +16,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { CopyIcon, RefreshCwIcon, ScrollTextIcon, SearchIcon } from '../../components/Icons.jsx'
 const quickFilters = [
   { label: '全部', value: '' },
-  { label: 'AI 错误', value: '[AI]' },
-  { label: '工具调用', value: 'Tool' },
+  { label: 'AI 日志', value: '[AI]' },
+  { label: '工具审计', value: '[ToolAudit]' },
   { label: '收到消息', value: '收到消息' },
   { label: '敏感词', value: 'sensitive_words' },
 ]
@@ -29,8 +29,11 @@ function levelClass(line) {
   if (/warn|警告|用户要求引用/i.test(line)) {
     return 'border-amber-200 bg-amber-50 text-amber-700'
   }
-  if (/ToolCall|ToolResult|模型选择引用|群聊回复引用/i.test(line)) {
+  if (/ToolAudit|ToolCall|ToolResult|模型选择引用|群聊回复引用/i.test(line)) {
     return 'border-violet-200 bg-violet-50 text-violet-800'
+  }
+  if (/\[AI\]|Gemini|回复开始|回复生成完成|发送.*回复/i.test(line)) {
+    return 'border-blue-200 bg-blue-50 text-blue-800'
   }
   if (/收到消息/i.test(line)) {
     return 'border-slate-200 bg-slate-100 text-sky-700'
@@ -42,7 +45,7 @@ export default function Logs() {
   const [data, setData] = useState({ lines: [], total: 0 })
   const [limit, setLimit] = useState(300)
   const [query, setQuery] = useState('')
-  const [autoRefresh, setAutoRefresh] = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState(true)
   const [newestFirst, setNewestFirst] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)

@@ -58,7 +58,10 @@ type GeminiFunctionCall = {
 type GeminiResponse = {
   candidates?: Array<{
     content?: GeminiContent;
+    groundingMetadata?: Record<string, any>;
+    urlContextMetadata?: Record<string, any>;
   }>;
+  urlContextMetadata?: Record<string, any>;
 };
 
 type HistoryItem = {
@@ -354,6 +357,93 @@ async function postGenerateContent(url: string, body: GeminiRequestBody): Promis
   });
 }
 
+function compactJson(value: unknown, maxLength = 900): string {
+  let text: string;
+  try {
+    text = JSON.stringify(value);
+  } catch {
+    text = String(value);
+  }
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function previewText(value: unknown, maxLength = 220): string {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function countInlineImageParts(body: GeminiRequestBody): number {
+  return (body.contents || []).reduce((count, content) => {
+    return count + (content.parts || []).filter((part) => Boolean((part as any).inline_data)).length;
+  }, 0);
+}
+
+function summarizeEnabledTools(body: GeminiRequestBody): Record<string, unknown> {
+  const summary = {
+    function_tools: [] as string[],
+    google_search: false,
+    url_context: false,
+  };
+  for (const tool of body.tools || []) {
+    if ('functionDeclarations' in tool) {
+      summary.function_tools.push(
+        ...((tool.functionDeclarations || []) as Array<Record<string, any>>)
+          .map((item) => item?.name || '(anonymous)')
+      );
+    }
+    if ('googleSearch' in tool) summary.google_search = true;
+    if ('urlContext' in tool) summary.url_context = true;
+  }
+  return summary;
+}
+
+function summarizeRequestedFunctionCalls(calls: GeminiFunctionCall[]): Array<Record<string, unknown>> {
+  return calls.map((call) => ({
+    name: call.name,
+    args: call.args || {},
+  }));
+}
+
+function summarizeResponseMetadata(data: GeminiResponse): Record<string, unknown> | null {
+  const candidate = data?.candidates?.[0] || {};
+  const grounding = candidate.groundingMetadata;
+  const urlContext = candidate.urlContextMetadata || data.urlContextMetadata;
+  const summary: Record<string, unknown> = {};
+
+  if (grounding) {
+    if (Array.isArray(grounding.webSearchQueries)) {
+      summary.web_search_queries = grounding.webSearchQueries.slice(0, 5);
+    }
+    if (Array.isArray(grounding.groundingChunks)) {
+      summary.grounding_chunks = grounding.groundingChunks.length;
+    }
+    if (Array.isArray(grounding.groundingSupports)) {
+      summary.grounding_supports = grounding.groundingSupports.length;
+    }
+    if (grounding.searchEntryPoint) {
+      summary.search_entry_point = true;
+    }
+  }
+
+  if (urlContext) {
+    if (Array.isArray(urlContext.urlMetadata)) {
+      summary.url_context_items = urlContext.urlMetadata.length;
+      summary.url_context_statuses = urlContext.urlMetadata.slice(0, 5).map((item: Record<string, any>) => ({
+        url: item.retrievedUrl || item.url,
+        status: item.urlRetrievalStatus || item.status,
+      }));
+    } else {
+      summary.url_context = true;
+    }
+  }
+
+  return Object.keys(summary).length > 0 ? summary : null;
+}
+
 /**
  * 调用 Gemini generateContent 生成 AI 回复。
  *
@@ -392,10 +482,20 @@ async function chat(
   const seenToolCalls = new Set();
   const allToolResults: ToolResult[] = [];
   let executedToolCalls = 0;
+  const requestStartedAt = Date.now();
+
+  console.log(
+    `[AI] Gemini 请求开始 model=${model} base_url=${baseUrl} contents=${body.contents.length} ` +
+    `image_parts=${countInlineImageParts(body)} tools=${compactJson(summarizeEnabledTools(body))} ` +
+    `max_rounds=${maxToolRounds} max_tool_calls=${maxToolCalls}`
+  );
 
   try {
     for (let round = 1; round <= maxToolRounds + 1; round += 1) {
+      const roundStartedAt = Date.now();
+      console.log(`[AI] Gemini 第${round}轮请求开始 contents=${body.contents.length} executed_tool_calls=${executedToolCalls}`);
       const resp = await postGenerateContent(url, body);
+      console.log(`[AI] Gemini 第${round}轮响应 status=${resp.status} duration_ms=${Date.now() - roundStartedAt}`);
       if (!resp.ok) {
         const errText = await resp.text().catch(() => '');
         console.error(
@@ -407,11 +507,25 @@ async function chat(
       const data = await resp.json() as GeminiResponse;
       const functionCalls = extractFunctionCalls(data);
       const reply = extractOutputText(data);
+      const responseMetadata = summarizeResponseMetadata(data);
+      if (responseMetadata) {
+        console.log(`[ToolAudit] builtin_metadata round=${round} ${compactJson(responseMetadata)}`);
+      }
       if (functionCalls.length === 0 || typeof options.executeFunctionCall !== 'function') {
-        if (reply) return reply;
+        if (reply) {
+          console.log(
+            `[AI] Gemini 回复完成 duration_ms=${Date.now() - requestStartedAt} rounds=${round} ` +
+            `tool_calls=${executedToolCalls} reply_chars=${reply.length} reply_preview="${previewText(reply)}"`
+          );
+          return reply;
+        }
         console.warn('[AI] Gemini 返回空回复:', JSON.stringify(data).slice(0, 500));
         return fallbackToolMessages(allToolResults);
       }
+
+      console.log(
+        `[ToolAudit] model_requested round=${round} requested=${compactJson(summarizeRequestedFunctionCalls(functionCalls))}`
+      );
 
       if (round > maxToolRounds || executedToolCalls >= maxToolCalls) {
         console.warn(`[AI] 工具调用达到限制 round=${round} executed=${executedToolCalls}`);
@@ -421,10 +535,16 @@ async function chat(
       const roundToolResults: ToolResult[] = [];
       const remainingCalls = Math.max(0, maxToolCalls - executedToolCalls);
       const callsToRun = functionCalls.slice(0, Math.min(maxCallsPerRound, remainingCalls));
+      if (functionCalls.length > callsToRun.length) {
+        console.warn(
+          `[ToolAudit] 本轮工具调用超过限制 round=${round} requested=${functionCalls.length} running=${callsToRun.length}`
+        );
+      }
 
       for (const [index, call] of callsToRun.entries()) {
         const key = toolCallKey(call);
         if (seenToolCalls.has(key)) {
+          console.warn(`[ToolAudit] duplicate_skipped round=${round} name=${call.name} args=${compactJson(call.args || {})}`);
           roundToolResults.push({
             name: call.name,
             response: {
@@ -468,6 +588,10 @@ async function chat(
       ];
     }
 
+    console.warn(
+      `[AI] Gemini 工具循环结束但没有最终文本 duration_ms=${Date.now() - requestStartedAt} ` +
+      `tool_calls=${executedToolCalls}`
+    );
     return fallbackToolMessages(allToolResults);
   } catch (e: unknown) {
     console.error('[AI] 调用 Gemini generateContent 异常:', errorMessage(e));
