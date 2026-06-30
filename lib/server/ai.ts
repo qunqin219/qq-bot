@@ -105,6 +105,7 @@ type ChatOptions = {
   maxHttpRetries?: number;
   httpRetryBaseDelayMs?: number;
   autoAttachImages?: boolean;
+  extraParts?: ContentPart[];
   onFinalTurn?: (_turn: { userContent: GeminiContent; modelContent: GeminiContent; reply: string }) => void;
 };
 
@@ -234,14 +235,17 @@ async function buildCurrentUserParts(
   });
   const text = stripCqCodes(userMessage) || (imageRecords.length ? '请分析这张图片。' : String(userMessage || ''));
   const parts: ContentPart[] = [{ text }];
-  if (options.autoAttachImages === false) return parts;
+  const extraParts = Array.isArray(options.extraParts)
+    ? options.extraParts.filter((part): part is ContentPart => Boolean(part && typeof part === 'object'))
+    : [];
+  if (options.autoAttachImages === false) return [...parts, ...extraParts];
 
   for (const record of imageRecords) {
     const part = await imageRecordToPart(record);
     if (part) parts.push(part);
   }
 
-  return parts;
+  return [...parts, ...extraParts];
 }
 
 async function buildContents(

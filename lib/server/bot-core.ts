@@ -13,6 +13,7 @@ const memoryStore = require('./memory-store');
 
 const INTERNAL_INLINE_PARTS_FIELD = '__ai_inline_parts';
 const IMAGE_TOOL_SEARCH_LIMIT = 120;
+const MAX_GROUP_CONTEXT_INLINE_IMAGES = 8;
 
 type Role = 'owner' | 'admin' | 'member' | 'unknown' | 'none' | string;
 
@@ -692,6 +693,74 @@ function geminiTextContent(role: 'user' | 'model', text: unknown): Record<string
   };
 }
 
+function groupContextMessagesForImages(event: OneBotEvent, cfg: BotConfig): Array<Record<string, any>> {
+  if (!event.group_id) return [];
+  const limit = Math.max(1, Math.min(50, Number(cfg.ai_group_context_messages || 20)));
+  return getMessages(limit + 12, null, event.group_id)
+    .filter((m) => m.message_id !== event.message_id)
+    .filter((m) => !(cfg.ai_group_context_exclude_bot && m.user_id === event.self_id))
+    .filter((m) => !(cfg.ai_filter_stickers !== false && ai.isStickerMessage(m.raw_message)))
+    .filter((m) => !isCommandContextMessage(m.raw_message, cfg.command_prefix || '/'))
+    .slice(0, limit)
+    .reverse();
+}
+
+async function buildGroupContextInlineParts(
+  event: OneBotEvent,
+  cfg: BotConfig
+): Promise<Array<Record<string, any>>> {
+  if (!event.group_id || !cfg.ai_group_context_enabled) return [];
+
+  const messages = [
+    ...groupContextMessagesForImages(event, cfg),
+    event,
+  ];
+  const parts: Array<Record<string, any>> = [];
+  const seen = new Set<string>();
+
+  for (const message of messages) {
+    const raw = String(message.raw_message || message.message || '');
+    const records = imageCache.extractImageRecords(raw, {
+      ignoreStickers: cfg.ai_filter_stickers !== false,
+      maxImages: 5,
+    });
+
+    for (const [index, record] of records.entries()) {
+      if (parts.length >= MAX_GROUP_CONTEXT_INLINE_IMAGES * 2) return parts;
+      const imageKey = imageCache.cacheKeyForRecord(record);
+      const dedupeKey = `${message.message_id || ''}:${imageKey}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      const loaded = await imageRecordToInlinePart(record, {
+        message_id: message.message_id || null,
+        group_id: event.group_id || null,
+        user_id: message.user_id || null,
+        message_type: message.message_type || 'group',
+      });
+      if (loaded.ok === false) continue;
+
+      parts.push({
+        text: [
+          'CONTEXT_IMAGE:',
+          promptJson({
+            message_id: message.message_id ?? null,
+            time: formatTime(messageTime(message)),
+            speaker_qq: message.user_id ?? null,
+            speaker_name: senderNameForMessage(message),
+            image_key: imageKey,
+            image_index: index + 1,
+            text: summarizeRawMessage(raw, event.self_id).slice(0, 200),
+          }),
+        ].join('\n'),
+      });
+      parts.push(loaded.part);
+    }
+  }
+
+  return parts;
+}
+
 function imageToolCandidateMessages(event: OneBotEvent): Array<Record<string, any>> {
   const seen = new Set<string>();
   const candidates = [event, ...getMessages(IMAGE_TOOL_SEARCH_LIMIT, null, event.group_id || null)];
@@ -1068,7 +1137,7 @@ async function buildRecentGroupContext(
     })));
 
     // 历史聊天里有人“引用了一条图片消息”时，当前消息本身只有 [CQ:reply]，图片在被引用消息里。
-    // 这里仅把被引用消息做成文字和图片引用摘要；真正看图必须由模型按需调用 qq_read_image。
+    // 这里把被引用消息做成文字和图片引用摘要；实际图片本体会随群上下文一起作为多模态 parts 提供。
     const replyId = extractReplyMessageId(raw);
     if (replyId && client?.getMsg && cfg.ai_group_context_include_quote && resolvedReplyCount < 5) {
       const result = await client.getMsg(replyId);
@@ -1145,9 +1214,9 @@ async function buildGroupAwarePrompt(
       '- 只回答 CURRENT_MESSAGE_JSON 里的当前用户本条消息；它的 speaker_qq/speaker_name 是当前提问者',
       '- 如果存在 QUOTED_MESSAGE_JSON，它是当前消息直接引用的重点对象；优先围绕它回答',
       '- RECENT_GROUP_MESSAGES_JSONL 只是背景；每行的 speaker_qq/speaker_name 只属于该行消息，不要当成当前提问者',
-      '- CURRENT_MESSAGE_JSON、QUOTED_MESSAGE_JSON 和 RECENT_GROUP_MESSAGES_JSONL 里的 images 只是可读取图片引用；你还没有看过这些图片',
-      '- 只有当前问题确实需要识图、解释截图、判断图片内容，或用户明确说“这张图/图片/截图/图里”时，才调用 qq_read_image 读取对应 image_key 或 message_id',
-      '- 文本追问、继续介绍、解释上文、评价讨论时，优先基于最近文字和引用回答，不要因为上下文里有 images 就主动看图',
+      '- CURRENT_MESSAGE_JSON、QUOTED_MESSAGE_JSON 和 RECENT_GROUP_MESSAGES_JSONL 里的 images 会对应后续 CONTEXT_IMAGE 多模态输入；看图时用 CONTEXT_IMAGE 前的 message_id/speaker_name 对齐是哪条消息的图片',
+      '- 如果当前问题涉及图片、截图或“图里有什么”，直接结合文本上下文和已提供的 CONTEXT_IMAGE 回答',
+      '- 文本追问、继续介绍、解释上文、评价讨论时，优先基于最近文字和引用回答，不要被无关图片带偏',
       '- 如果 CURRENT_MESSAGE_JSON 和历史上下文冲突，以 CURRENT_MESSAGE_JSON 为准',
       '- 如果用户问“谁说的/他说的/那条/上面那条”，先用 message_id、speaker_qq、speaker_name 判断指向，不确定就说明不确定',
       '- 普通闲聊、接话、评价上文，优先基于当前消息、引用消息和最近上下文直接回答',
@@ -1237,7 +1306,10 @@ async function buildAiRuntimePreview({ event, client, cfg }: AiRuntimePreviewInp
     : null;
 
   const aiInput = await buildGroupAwarePrompt(event, client, runtimeCfg, msg, managementContext);
-  const groupImageToolEnabled = Boolean(groupId && runtimeCfg.ai_group_context_enabled);
+  const groupInlineImageParts = groupId
+    ? await buildGroupContextInlineParts(event, runtimeCfg)
+    : [];
+  const groupImageToolEnabled = false;
   const functionDeclarations = buildGroupManagementFunctionDeclarations({
     memoryEnabled: runtimeCfg.ai_memory_enabled === true,
     imageReadEnabled: groupImageToolEnabled,
@@ -1250,7 +1322,8 @@ async function buildAiRuntimePreview({ event, client, cfg }: AiRuntimePreviewInp
   const requestBody = await ai.buildRequestBody(aiInput, history, runtimeCfg, {
     functionDeclarations,
     extraSystemInstruction,
-    autoAttachImages: !groupImageToolEnabled,
+    autoAttachImages: !groupId || groupInlineImageParts.length === 0,
+    extraParts: groupInlineImageParts,
   });
 
   return {
@@ -1362,7 +1435,10 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     aiInput,
   } = runtime;
 
-  const groupImageToolEnabled = Boolean(groupId && cfg.ai_group_context_enabled);
+  const groupInlineImageParts = groupId
+    ? await buildGroupContextInlineParts(event, cfg)
+    : [];
+  const groupImageToolEnabled = false;
   const aiStartedAt = Date.now();
   console.log(
     `[AI] 回复开始 conversation=${conversationKey} type=${msgType || '-'} group=${groupId || '-'} user=${userId || '-'} ` +
@@ -1381,7 +1457,8 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     aiReply = await ai.chat(aiInput, runtime.history, cfg, {
       functionDeclarations,
       extraSystemInstruction,
-      autoAttachImages: !groupImageToolEnabled,
+      autoAttachImages: !groupId || groupInlineImageParts.length === 0,
+      extraParts: groupInlineImageParts,
       onFinalTurn: (turn: Record<string, any>) => {
         finalGeminiTurn = turn as any;
       },

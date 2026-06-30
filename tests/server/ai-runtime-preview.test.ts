@@ -88,7 +88,7 @@ function makeClient(): TestClient {
   };
 }
 
-test('runtime preview exposes current image as a readable tool reference', async () => {
+test('runtime preview attaches current group image with the text context', async () => {
   assert.equal(typeof botCore.buildAiRuntimePreview, 'function');
 
   await withImageServer(async (imageUrl) => {
@@ -103,7 +103,6 @@ test('runtime preview exposes current image as a readable tool reference', async
     assert.match(preview.aiInput, /sam最新动态/);
     assert.match(preview.aiInput, /CURRENT_MESSAGE_JSON/);
     assert.match(preview.aiInput, /speaker_qq/);
-    assert.match(preview.aiInput, /qq_read_image/);
     assert.match(preview.aiInput, /"images":\[/);
     assert.doesNotMatch(preview.aiInput, /\[CQ:image/);
     assert.match(preview.extraSystemInstruction, /## Memories/);
@@ -116,7 +115,7 @@ test('runtime preview exposes current image as a readable tool reference', async
 
     const declarations = tools.flatMap((tool: Record<string, any>) => tool.functionDeclarations || []);
     const names = declarations.map((item: Record<string, any>) => item.name).sort();
-    assert.ok(names.includes('qq_read_image'));
+    assert.equal(names.includes('qq_read_image'), false);
     assert.equal(names.includes('qq_search_chat_history'), false);
     assert.ok(names.includes('create_memory'));
     assert.ok(names.includes('edit_memory'));
@@ -127,7 +126,8 @@ test('runtime preview exposes current image as a readable tool reference', async
     assert.match(last.parts[0].text, /sam最新动态/);
     assert.match(last.parts[0].text, /CURRENT_MESSAGE_JSON/);
     assert.match(last.parts[0].text, /"speaker_qq":3605900361/);
-    assert.equal(last.parts.length, 1, 'group images should not be pre-attached as image input');
+    assert.ok(last.parts.some((part: Record<string, any>) => /CONTEXT_IMAGE/.test(String(part.text || ''))));
+    assert.ok(last.parts.some((part: Record<string, any>) => part.inline_data?.mime_type === 'image/png'));
   });
 });
 
@@ -167,7 +167,7 @@ test('group runtime uses role history for the bot own previous replies', async (
   assert.doesNotMatch(preview.aiInput, /qq_search_chat_history/);
 });
 
-test('quoted link question does not attach unrelated recent group images', async () => {
+test('quoted link question keeps recent group images attached with context', async () => {
   await withImageServer(async (imageUrl) => {
     addMessage({
       post_type: 'message',
@@ -215,14 +215,12 @@ test('quoted link question does not attach unrelated recent group images', async
 
     assert.match(preview.aiInput, /QUOTED_MESSAGE_JSON/);
     assert.match(preview.aiInput, /BV1smKX6kED6/);
-    assert.doesNotMatch(preview.aiInput, /RECENT_IMAGE_ATTACHMENTS_JSONL/);
-
     const last = preview.requestBody.contents.at(-1);
-    assert.equal(last.parts.length, 1, 'unrelated recent images should stay out of visual input');
+    assert.ok(last.parts.some((part: Record<string, any>) => part.inline_data?.mime_type === 'image/png'));
   });
 });
 
-test('image question exposes recent images as readable references without pre-attaching them', async () => {
+test('image question attaches recent group images with the text context', async () => {
   await withImageServer(async (imageUrl) => {
     addMessage({
       post_type: 'message',
@@ -249,7 +247,8 @@ test('image question exposes recent images as readable references without pre-at
     assert.match(preview.aiInput, /"images":\[/);
 
     const last = preview.requestBody.contents.at(-1);
-    assert.equal(last.parts.length, 1, 'recent images should only be attached after qq_read_image is called');
+    assert.ok(last.parts.some((part: Record<string, any>) => /"message_id":9101/.test(String(part.text || ''))));
+    assert.ok(last.parts.some((part: Record<string, any>) => part.inline_data?.mime_type === 'image/png'));
   });
 });
 
