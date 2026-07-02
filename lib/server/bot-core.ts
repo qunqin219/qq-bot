@@ -693,7 +693,8 @@ function geminiTextContent(role: 'user' | 'model', text: unknown): Record<string
   };
 }
 
-function groupContextMessagesForImages(event: OneBotEvent, cfg: BotConfig): Array<Record<string, any>> {
+// 群聊最近消息（旧到新）。文字上下文、图片上下文都基于同一份结果，避免重复查询/过滤。
+function getRecentGroupMessages(event: OneBotEvent, cfg: BotConfig): Array<Record<string, any>> {
   if (!event.group_id) return [];
   const limit = Math.max(1, Math.min(50, Number(cfg.ai_group_context_messages || 20)));
   return getMessages(limit + 12, null, event.group_id)
@@ -705,16 +706,33 @@ function groupContextMessagesForImages(event: OneBotEvent, cfg: BotConfig): Arra
     .reverse();
 }
 
+// 自动附带的图片只包含：当前消息自己的图片、当前消息明确引用/回复的那条消息的图片。
+// 其余历史群聊图片一律不主动塞给模型看——只在 RECENT_GROUP_MESSAGES_JSONL 里留一个 image_key 文字引用，
+// 模型如果判断确实需要看某张历史图片，会自己调用 qq_read_image 工具按需读取（见 buildGroupManagementFunctionDeclarations）。
+// 这样可以避免模型被“恰好在附近但没人问”的图片带偏，同时又不会让它彻底看不到旧图。
 async function buildGroupContextInlineParts(
   event: OneBotEvent,
+  client: OneBotClient,
   cfg: BotConfig
 ): Promise<Array<Record<string, any>>> {
   if (!event.group_id || !cfg.ai_group_context_enabled) return [];
 
-  const messages = [
-    ...groupContextMessagesForImages(event, cfg),
-    event,
-  ];
+  const messages: Array<Record<string, any>> = [event];
+
+  const replyId = extractReplyMessageId(event.raw_message || '');
+  if (replyId && cfg.ai_group_context_include_quote && client?.getMsg) {
+    const quoted = await client.getMsg(replyId);
+    if (quoted?.status === 'ok' && quoted.data) {
+      messages.push({
+        message_id: quoted.data.message_id ?? replyId,
+        raw_message: quoted.data.raw_message || String(quoted.data.message || ''),
+        user_id: quoted.data.user_id ?? null,
+        sender: quoted.data.sender || {},
+        message_type: 'group',
+      });
+    }
+  }
+
   const parts: Array<Record<string, any>> = [];
   const seen = new Set<string>();
 
@@ -1113,17 +1131,11 @@ async function buildMentionedMembersContext(event: OneBotEvent, client: OneBotCl
 async function buildRecentGroupContext(
   event: OneBotEvent,
   client: OneBotClient,
-  cfg: BotConfig
+  cfg: BotConfig,
+  recentMessages: Array<Record<string, any>> | null = null
 ): Promise<string> {
   if (!cfg.ai_group_context_enabled || !event.group_id) return '';
-  const limit = Math.max(1, Math.min(50, Number(cfg.ai_group_context_messages || 20)));
-  const messagesLatestFirst = getMessages(limit + 12, null, event.group_id)
-    .filter((m) => m.message_id !== event.message_id)
-    .filter((m) => !(cfg.ai_group_context_exclude_bot && m.user_id === event.self_id))
-    .filter((m) => !(cfg.ai_filter_stickers !== false && ai.isStickerMessage(m.raw_message)))
-    .filter((m) => !isCommandContextMessage(m.raw_message, cfg.command_prefix || '/'))
-    .slice(0, limit);
-  const messages = messagesLatestFirst.reverse();
+  const messages = recentMessages || getRecentGroupMessages(event, cfg);
 
   if (!messages.length) return '';
 
@@ -1204,7 +1216,8 @@ async function buildGroupAwarePrompt(
   client: OneBotClient,
   cfg: BotConfig,
   currentMsg: string,
-  managementContext: ManagementPromptContext | null = null
+  managementContext: ManagementPromptContext | null = null,
+  recentMessages: Array<Record<string, any>> | null = null
 ): Promise<string> {
   if (!event.group_id || !cfg.ai_group_context_enabled) return currentMsg;
 
@@ -1214,9 +1227,12 @@ async function buildGroupAwarePrompt(
       '- 只回答 CURRENT_MESSAGE_JSON 里的当前用户本条消息；它的 speaker_qq/speaker_name 是当前提问者',
       '- 如果存在 QUOTED_MESSAGE_JSON，它是当前消息直接引用的重点对象；优先围绕它回答',
       '- RECENT_GROUP_MESSAGES_JSONL 只是背景；每行的 speaker_qq/speaker_name 只属于该行消息，不要当成当前提问者',
-      '- CURRENT_MESSAGE_JSON、QUOTED_MESSAGE_JSON 和 RECENT_GROUP_MESSAGES_JSONL 里的 images 会对应后续 CONTEXT_IMAGE 多模态输入；看图时用 CONTEXT_IMAGE 前的 message_id/speaker_name 对齐是哪条消息的图片',
-      '- 如果当前问题涉及图片、截图或“图里有什么”，直接结合文本上下文和已提供的 CONTEXT_IMAGE 回答',
-      '- 文本追问、继续介绍、解释上文、评价讨论时，优先基于最近文字和引用回答，不要被无关图片带偏',
+      '- 只有 CURRENT_MESSAGE_JSON（当前消息自己的图）和 QUOTED_MESSAGE_JSON（当前消息明确引用/回复的那条消息的图）会自动附带真实的 CONTEXT_IMAGE 多模态图片；看图时用 CONTEXT_IMAGE 前的 message_id/speaker_name 对齐是哪条消息的图片',
+      '- RECENT_GROUP_MESSAGES_JSONL 里某行如果带 images 字段，那只是图片的索引信息（image_key/message_id），你还没有真正看到这张图；只有当前问题确实需要看这张历史图片时，才调用 qq_read_image 工具（传 image_key 或 message_id+image_index）获取图片，不要凭 image_key 猜图片内容，也不要没事找事去调用',
+      '- 重要：先判断 CURRENT_MESSAGE_JSON 这句话本身到底在问/要求什么（回答问题、搜索、点评、闲聊等），并把这件事作为回复的主体，直接开头切入，不要用介绍/描述某张图片开头',
+      '- 除非当前消息或 QUOTED_MESSAGE_JSON 自带图片、或者你主动调用 qq_read_image 看过某张历史图片，否则不要凭空描述、总结、点评任何图片内容',
+      '- 文本追问、继续介绍、解释上文、评价讨论、搜索查证时，只使用最近文字和引用回答问题本身，不要被无关图片带偏、也不要把图片内容当成额外话题主动展开',
+      '- 即使 CURRENT_MESSAGE_JSON 或 QUOTED_MESSAGE_JSON 确实带了 CONTEXT_IMAGE，也要先判断当前这句话问的是不是跟这张图有关；如果当前问题明显在问别的事（引用只是顺手接了个话头，图片本身跟问题无关），就只回答那件事本身，不要因为看到了图片就多余地补充/点评图片内容',
       '- 如果 CURRENT_MESSAGE_JSON 和历史上下文冲突，以 CURRENT_MESSAGE_JSON 为准',
       '- 如果用户问“谁说的/他说的/那条/上面那条”，先用 message_id、speaker_qq、speaker_name 判断指向，不确定就说明不确定',
       '- 普通闲聊、接话、评价上文，优先基于当前消息、引用消息和最近上下文直接回答',
@@ -1252,7 +1268,7 @@ async function buildGroupAwarePrompt(
   const pending = buildPendingBotMentionContext(event, cfg);
   if (pending) sections.push(pending);
 
-  const recent = await buildRecentGroupContext(event, client, cfg);
+  const recent = await buildRecentGroupContext(event, client, cfg, recentMessages);
   if (recent) sections.push(recent);
 
   const currentImages = buildImageRefs(currentMsg);
@@ -1305,11 +1321,14 @@ async function buildAiRuntimePreview({ event, client, cfg }: AiRuntimePreviewInp
     }
     : null;
 
-  const aiInput = await buildGroupAwarePrompt(event, client, runtimeCfg, msg, managementContext);
+  // 群消息只查一次并在文字上下文、图片上下文之间共用，避免同一轮回复里重复查库/重复处理图片。
+  const recentGroupMessages = groupId ? getRecentGroupMessages(event, runtimeCfg) : [];
+  const aiInput = await buildGroupAwarePrompt(event, client, runtimeCfg, msg, managementContext, recentGroupMessages);
   const groupInlineImageParts = groupId
-    ? await buildGroupContextInlineParts(event, runtimeCfg)
+    ? await buildGroupContextInlineParts(event, client, runtimeCfg)
     : [];
-  const groupImageToolEnabled = false;
+  // 历史图片默认不主动塞给模型看，改成让模型按需调用 qq_read_image 工具读取。
+  const groupImageToolEnabled = Boolean(groupId) && runtimeCfg.ai_group_context_enabled === true;
   const functionDeclarations = buildGroupManagementFunctionDeclarations({
     memoryEnabled: runtimeCfg.ai_memory_enabled === true,
     imageReadEnabled: groupImageToolEnabled,
@@ -1336,6 +1355,7 @@ async function buildAiRuntimePreview({ event, client, cfg }: AiRuntimePreviewInp
     extraSystemInstruction,
     aiInput,
     requestBody,
+    groupInlineImageParts,
   };
 }
 
@@ -1433,12 +1453,8 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
     functionDeclarations,
     extraSystemInstruction,
     aiInput,
+    groupInlineImageParts,
   } = runtime;
-
-  const groupInlineImageParts = groupId
-    ? await buildGroupContextInlineParts(event, cfg)
-    : [];
-  const groupImageToolEnabled = false;
   const aiStartedAt = Date.now();
   console.log(
     `[AI] 回复开始 conversation=${conversationKey} type=${msgType || '-'} group=${groupId || '-'} user=${userId || '-'} ` +
@@ -1532,14 +1548,20 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
 
   const historyUserText = cleanMsg;
   const historyAssistantText = aiReply;
+  // 群聊历史是全群共享的，多个人的问答会混在同一份历史里；
+  // 存历史时把发言人标注进去，避免机器人下次读历史时分不清是谁问的、回复的是谁。
+  const speakerLabel = `${getEventSenderName(event)}(QQ:${userId || '未知'})`;
   const historyUserGeminiContent = groupId
-    ? geminiTextContent('user', historyUserText)
+    ? geminiTextContent('user', `${speakerLabel} 说：${historyUserText}`)
     : finalGeminiTurn?.userContent;
+  const historyModelGeminiContent = groupId
+    ? geminiTextContent('model', `机器人（回复${speakerLabel}）：${historyAssistantText}`)
+    : finalGeminiTurn?.modelContent;
   conversationStore.appendTurn(conversationKey, historyUserText, historyAssistantText, contextTurns, groupId ? {
     user_id: userId,
     user_name: getEventSenderName(event),
     user_gemini_content: historyUserGeminiContent,
-    model_gemini_content: finalGeminiTurn?.modelContent,
+    model_gemini_content: historyModelGeminiContent,
   } : {
     user_gemini_content: historyUserGeminiContent,
     model_gemini_content: finalGeminiTurn?.modelContent,

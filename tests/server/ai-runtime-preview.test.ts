@@ -115,7 +115,8 @@ test('runtime preview attaches current group image with the text context', async
 
     const declarations = tools.flatMap((tool: Record<string, any>) => tool.functionDeclarations || []);
     const names = declarations.map((item: Record<string, any>) => item.name).sort();
-    assert.equal(names.includes('qq_read_image'), false);
+    // 历史图片不再默认塞给模型看，改成让模型按需调用 qq_read_image 工具读取，所以群聊里这个工具应该始终可用。
+    assert.equal(names.includes('qq_read_image'), true);
     assert.equal(names.includes('qq_search_chat_history'), false);
     assert.ok(names.includes('create_memory'));
     assert.ok(names.includes('edit_memory'));
@@ -167,7 +168,7 @@ test('group runtime uses role history for the bot own previous replies', async (
   assert.doesNotMatch(preview.aiInput, /qq_search_chat_history/);
 });
 
-test('quoted link question keeps recent group images attached with context', async () => {
+test('unrelated recent image is not auto-attached when the question is not about it', async () => {
   await withImageServer(async (imageUrl) => {
     addMessage({
       post_type: 'message',
@@ -215,12 +216,14 @@ test('quoted link question keeps recent group images attached with context', asy
 
     assert.match(preview.aiInput, /QUOTED_MESSAGE_JSON/);
     assert.match(preview.aiInput, /BV1smKX6kED6/);
+    // 引用的消息本身没有图片，当前问题也没提到"图/截图"，
+    // momo 那张跟话题无关的历史图片不应该被自动附带给模型看，避免带偏回答。
     const last = preview.requestBody.contents.at(-1);
-    assert.ok(last.parts.some((part: Record<string, any>) => part.inline_data?.mime_type === 'image/png'));
+    assert.ok(!last.parts.some((part: Record<string, any>) => part.inline_data?.mime_type === 'image/png'));
   });
 });
 
-test('image question attaches recent group images with the text context', async () => {
+test('question about a historical image gets a text reference and the read-image tool, not the raw image', async () => {
   await withImageServer(async (imageUrl) => {
     addMessage({
       post_type: 'message',
@@ -243,12 +246,17 @@ test('image question attaches recent group images with the text context', async 
       cfg: makeConfig(),
     });
 
+    // 历史图片只留下 image_key/message_id 的文字引用，不会自动把图片本身塞进去。
     assert.match(preview.aiInput, /"message_id":9101/);
     assert.match(preview.aiInput, /"images":\[/);
 
     const last = preview.requestBody.contents.at(-1);
     assert.ok(last.parts.some((part: Record<string, any>) => /"message_id":9101/.test(String(part.text || ''))));
-    assert.ok(last.parts.some((part: Record<string, any>) => part.inline_data?.mime_type === 'image/png'));
+    assert.ok(!last.parts.some((part: Record<string, any>) => part.inline_data?.mime_type === 'image/png'));
+
+    // 模型如果判断确实需要看这张图，应该能通过 qq_read_image 工具按需读取。
+    const declarations = (preview.requestBody.tools || []).flatMap((tool: Record<string, any>) => tool.functionDeclarations || []);
+    assert.ok(declarations.some((item: Record<string, any>) => item.name === 'qq_read_image'));
   });
 });
 
