@@ -15,6 +15,27 @@ const INTERNAL_INLINE_PARTS_FIELD = '__ai_inline_parts';
 const IMAGE_TOOL_SEARCH_LIMIT = 120;
 const MAX_GROUP_CONTEXT_INLINE_IMAGES = 8;
 
+// 按会话（群/私聊）串行化 AI 处理：避免同一会话里近乎同时的两条消息并发读取同一份历史、
+// 互相看不到对方那一轮，导致回复错乱或历史写入顺序与实际对话顺序不一致。
+const conversationLocks = new Map<string, Promise<void>>();
+
+async function withConversationLock<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = conversationLocks.get(key) || Promise.resolve();
+  let releaseSelf: () => void;
+  const selfDone = new Promise<void>((resolve) => { releaseSelf = resolve; });
+  // 立刻把自己挂到队尾，这样紧接着到来的第三条消息会排在自己后面，而不是并列排在 previous 后面。
+  conversationLocks.set(key, selfDone);
+  await previous;
+  try {
+    return await task();
+  } finally {
+    releaseSelf!();
+    if (conversationLocks.get(key) === selfDone) {
+      conversationLocks.delete(key);
+    }
+  }
+}
+
 type Role = 'owner' | 'admin' | 'member' | 'unknown' | 'none' | string;
 
 type BotConfig = Record<string, any> & {
@@ -1235,6 +1256,7 @@ async function buildGroupAwarePrompt(
       '- 即使 CURRENT_MESSAGE_JSON 或 QUOTED_MESSAGE_JSON 确实带了 CONTEXT_IMAGE，也要先判断当前这句话问的是不是跟这张图有关；如果当前问题明显在问别的事（引用只是顺手接了个话头，图片本身跟问题无关），就只回答那件事本身，不要因为看到了图片就多余地补充/点评图片内容',
       '- 如果 CURRENT_MESSAGE_JSON 和历史上下文冲突，以 CURRENT_MESSAGE_JSON 为准',
       '- 如果用户问“谁说的/他说的/那条/上面那条”，先用 message_id、speaker_qq、speaker_name 判断指向，不确定就说明不确定',
+      '- RECENT_GROUP_MESSAGES_JSONL 只用来读懂当前这句话在说什么，不要主动引用、复述、点评里面别人说过的话；用户没让你翻旧账、没问“刚刚谁说了什么”这类问题时，回复里不要提到群里其他人之前说过什么',
       '- 普通闲聊、接话、评价上文，优先基于当前消息、引用消息和最近上下文直接回答',
       '- 需要外部事实、最新消息、网页内容、产品/模型/公司/事件资料、价格、版本或状态时，联网工具可用再查证',
       '- 只有用户明确要求引用/回复/评价某条消息，或明显用“他/她/那条/上面那条”指向某条上文时，才在最终回复第一行输出“引用消息ID：数字”',
@@ -1445,6 +1467,25 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
   let cleanMsg = summarizeRawMessage(msg, event.self_id);
   if (!cleanMsg) cleanMsg = /\[CQ:image,/.test(msg) ? '[图片]' : '你好';
 
+  // 同一会话（同一个群/同一个私聊）内，AI 的“读历史 -> 请求模型 -> 写历史”必须串行执行；
+  // 否则两条近乎同时到达的消息会并发地基于同一份旧历史发起请求，互相看不到对方那一轮回复。
+  const lockKey = conversationStore.getConversationKey(event);
+  await withConversationLock(lockKey, () => handleAiTurn(event, client, cfg, {
+    userId,
+    msgType,
+    groupId,
+    isAdmin,
+    cleanMsg,
+  }));
+}
+
+async function handleAiTurn(
+  event: OneBotEvent,
+  client: OneBotClient,
+  cfg: BotConfig,
+  ctxInfo: { userId: number | string; msgType: string; groupId: number | string | null | undefined; isAdmin: boolean; cleanMsg: string }
+): Promise<void> {
+  const { userId, msgType, groupId, isAdmin, cleanMsg } = ctxInfo;
   const runtime = await buildAiRuntimePreview({ event, client, cfg });
   const {
     conversationKey,
