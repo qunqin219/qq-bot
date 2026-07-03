@@ -31,8 +31,8 @@ const NO_THOUGHT_LEAK_SYSTEM_INSTRUCTION = [
   '不要输出 _thought、thought、thinking、analysis、reasoning、scratchpad、<think>、<analysis>、```thought 这类字段或标记。',
 ].join('\n');
 const THOUGHT_LEAK_REPAIR_PROMPT = [
-  '上一条候选回复包含内部草稿或思维链，已被系统拦截。',
-  '请重新回答当前用户，只输出最终自然回复正文。',
+  '上一条候选回复包含内部草稿、思维链，或者是不完整/异常的残留内容（比如工具调用碎片），已被系统拦截。',
+  '请重新回答当前用户，只输出最终自然回复正文，用完整的自然语言句子回答，不要输出任何 JSON、代码片段或残缺内容。',
   '不要输出 _thought、thinking、analysis、reasoning、思考过程、草稿或任何内部标签。',
 ].join('\n');
 
@@ -165,11 +165,21 @@ function extractImageUrls(message: unknown, options = {}): string[] {
     .slice(0, MAX_IMAGES_PER_MESSAGE);
 }
 
+// 把可能包含换行的原始文本（比如网关返回的 HTML 错误页）压成单行摘要，
+// 避免这类内容按换行拆成一堆丢了 [AI] 模块标签的裸行，把日志搅乱。
+function oneLinePreview(text: unknown, maxLength = 300): string {
+  const flat = String(text || '').replace(/\s+/g, ' ').trim();
+  return flat.length > maxLength ? `${flat.slice(0, maxLength)}...` : flat;
+}
+
 function stripCqCodes(message: unknown): string {
-  return decodeHtmlEntities(String(message || ''))
-    .replace(/\[CQ:[^\]]+\]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  // 先去掉 CQ 码，再解码 HTML 实体——顺序不能反。
+  // CQ 码参数值里的 `,` `[` `]` `&` 会被转义成 &#44;/&#91;/&#93;/&amp;，
+  // 如果先解码，图片 URL 等参数里一旦还原出裸的 `]`，会让下面这个基于
+  // `[^\]]+\]` 的正则提前收尾，导致 CQ 码只删掉一半，剩下的原始 URL/参数
+  // 碎片就会泄漏到日志、AI 上下文和历史记录里。
+  const withoutCqCodes = String(message || '').replace(/\[CQ:[^\]]+\]/g, '');
+  return decodeHtmlEntities(withoutCqCodes).replace(/\s+/g, ' ').trim();
 }
 
 async function imageUrlToPart(url: string): Promise<InlineDataPart | null> {
@@ -440,6 +450,15 @@ function containsThoughtLine(text: string): boolean {
     .test(text);
 }
 
+// 极少数情况下（通常在多轮工具调用后），模型最终这一轮吐出的不是自然语言回复，
+// 而是一小段残留的 JSON/工具调用碎片（比如 "0}"）。这种输出直接发到群里会很突兀，
+// 用同样长度很短、且完全不含任何文字（只剩数字/括号/引号这类符号）作为特征来识别。
+function isDegenerateJsonFragment(text: string): boolean {
+  if (text.length > 6) return false;
+  if (!/[{}[\]]/.test(text)) return false;
+  return !/[\p{L}]/u.test(text);
+}
+
 function sanitizeModelReply(raw: unknown): SanitizedReply {
   const original = String(raw || '').trim();
   if (!original) return { text: '', leaked: false, blocked: false, reason: '' };
@@ -453,6 +472,10 @@ function sanitizeModelReply(raw: unknown): SanitizedReply {
       blocked: stripped.changed,
       reason: 'delimited_thought_only',
     };
+  }
+
+  if (isDegenerateJsonFragment(text)) {
+    return { text: '', leaked: true, blocked: true, reason: 'degenerate_json_fragment' };
   }
 
   const finalText = extractAfterFinalMarker(text);
@@ -734,7 +757,7 @@ async function chat(
         if (!canRetry) {
           console.error(
             `[AI] Gemini generateContent 第${round}轮返回错误 ${resp.status} ` +
-            `attempt=${attempt + 1}/${maxHttpRetries + 1}: ${errText.slice(0, 500)}`
+            `attempt=${attempt + 1}/${maxHttpRetries + 1}: ${oneLinePreview(errText, 500)}`
           );
           if (retryable) {
             console.warn(`[AI] Gemini 第${round}轮重试耗尽 status=${resp.status}，本次不回复`);
@@ -746,7 +769,7 @@ async function chat(
         const waitMs = retryDelayMs(resp, httpRetryBaseDelayMs * (2 ** attempt));
         console.warn(
           `[AI] Gemini 第${round}轮返回可重试错误 ${resp.status}，${waitMs}ms 后重试 ` +
-          `attempt=${attempt + 1}/${maxHttpRetries + 1}: ${errText.slice(0, 300)}`
+          `attempt=${attempt + 1}/${maxHttpRetries + 1}: ${oneLinePreview(errText, 300)}`
         );
         await sleep(waitMs);
       }
@@ -765,7 +788,7 @@ async function chat(
       if (functionCalls.length === 0 || typeof options.executeFunctionCall !== 'function') {
         if (sanitizedReply.leaked) {
           console.warn(
-            `[AI] Gemini 回复包含内部思考标记 reason=${sanitizedReply.reason} ` +
+            `[AI] Gemini 回复异常（内部思考泄漏或残留碎片）reason=${sanitizedReply.reason} ` +
             `blocked=${sanitizedReply.blocked} round=${round}`
           );
         }

@@ -308,6 +308,7 @@ function buildMemorySystemPrompt(conversationKey: string): string {
 - 首次聊天时间
 - ...
 请主动调用工具记录，而不是需要用户要求。
+只记录真实、客观的信息；如果群里在跟你玩梗、玩角色扮演、开玩笑（比如好感度、攻略进度、人设剧情之类的），这些是娱乐互动，不是真实信息，**不要**把这类内容当成事实存进记忆。
 记忆如果包含日期信息，请包含在内，请使用绝对时间格式，并且当前时间是${currentHour}。
 **绝对不要**在回复中提及记忆操作，例如"已帮你记下来了""我已经记住了""已更新记录"之类的话一律不能说，也不要在对话中直接显示记忆内容，除非用户主动要求查看。记忆工具调用必须完全静默，对用户不可见。
 相似或相关的记忆应合并为一条记录，而不要重复记录，过时记录应删除。
@@ -1303,6 +1304,10 @@ async function buildGroupAwarePrompt(
       text: summarizeRawMessage(currentMsg, event.self_id),
       ...(currentImages.length ? { images: currentImages } : {}),
     }),
+    // 长对话里模型很容易被自己前几轮里写过的长回复带节奏，即使系统提示词要求简洁也会越写越长；
+    // 这条特意放在整个 prompt 最后、紧贴着当前问题，靠“最近位置”的权重去对抗这种惯性漂移，
+    // 而不是只在最前面的系统提示词里说一次。注意不要矫枉过正——真正需要展开的问题还是可以写长。
+    '不管上文（包括你自己之前的回复）多长，这次的长度只由当前这句话本身的难度决定：简单的问题就简短回答，不要被之前更长的回复带节奏；问题本身复杂、或用户明确要详细说明时，照样可以写够长度，不用为了显得简洁而故意省略该讲的内容。',
   ].join('\n'));
   return sections.join('\n\n');
 }
@@ -1590,19 +1595,18 @@ async function handleAiTurn(
   const historyUserText = cleanMsg;
   const historyAssistantText = aiReply;
   // 群聊历史是全群共享的，多个人的问答会混在同一份历史里；
-  // 存历史时把发言人标注进去，避免机器人下次读历史时分不清是谁问的、回复的是谁。
+  // 只在“用户”这一侧的历史文本里标注发言人（role=user，模型不会把这种文本当成自己该说的话去模仿）。
+  // 注意：绝不能在“模型”这一侧的历史文本里加类似前缀——模型会把自己过去说过的话当成范本，
+  // 学着在新回复里也主动加上“机器人（回复XXX）：”这种前缀，然后这段内部标注就被当成正文发到群里了。
   const speakerLabel = `${getEventSenderName(event)}(QQ:${userId || '未知'})`;
   const historyUserGeminiContent = groupId
     ? geminiTextContent('user', `${speakerLabel} 说：${historyUserText}`)
     : finalGeminiTurn?.userContent;
-  const historyModelGeminiContent = groupId
-    ? geminiTextContent('model', `机器人（回复${speakerLabel}）：${historyAssistantText}`)
-    : finalGeminiTurn?.modelContent;
   conversationStore.appendTurn(conversationKey, historyUserText, historyAssistantText, contextTurns, groupId ? {
     user_id: userId,
     user_name: getEventSenderName(event),
     user_gemini_content: historyUserGeminiContent,
-    model_gemini_content: historyModelGeminiContent,
+    model_gemini_content: finalGeminiTurn?.modelContent,
   } : {
     user_gemini_content: historyUserGeminiContent,
     model_gemini_content: finalGeminiTurn?.modelContent,

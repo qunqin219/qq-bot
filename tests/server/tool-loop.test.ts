@@ -198,7 +198,7 @@ test('chat blocks leaked thought text and retries once for a clean reply', async
 
     assert.equal(reply, '这是在玩“不交代上下文让 AI 猜”的梗');
     assert.equal(requests.length, 2);
-    assert.match(requests[1].contents.at(-1).parts[0].text, /内部草稿或思维链/);
+    assert.match(requests[1].contents.at(-1).parts[0].text, /内部草稿、思维链/);
   } finally {
     global.fetch = oldFetch;
   }
