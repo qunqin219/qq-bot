@@ -1,10 +1,7 @@
 // 个性化记忆存储 —— 参考 Kelivo 的 assistant memory 模型，但按 QQ 会话 key 隔离
 
-const { MEMORIES_FILE } = require('./paths') as { MEMORIES_FILE: string };
-const { readJsonFile, writeJsonFileAtomic } = require('./json-store') as {
-  readJsonFile<T>(_filePath: string, _fallback: T, _validate?: ((_data: unknown) => _data is T) | null): T;
-  writeJsonFileAtomic(_filePath: string, _data: unknown): void;
-};
+import { getMemoriesFile } from './paths.js';
+import { readJsonFile, writeJsonFileAtomic } from './json-store.js';
 
 type MemoryRecord = {
   id: number;
@@ -23,8 +20,6 @@ type MemorySummary = {
   updated_at: string | null;
 };
 
-// memories.json 位于项目根目录
-const STORE_FILE = MEMORIES_FILE;
 const MAX_CONTENT_LENGTH = 1200;
 
 function normalizeKey(key: unknown): string {
@@ -36,7 +31,7 @@ function normalizeContent(content: unknown): string {
 }
 
 function readStore(): StoredMemoryRecord[] {
-  const data = readJsonFile<MemoryStoreFile>(STORE_FILE, [], (value): value is MemoryStoreFile => {
+  const data = readJsonFile<MemoryStoreFile>(getMemoriesFile(), [], (value): value is MemoryStoreFile => {
     return Array.isArray(value) || (
       Boolean(value) &&
       typeof value === 'object' &&
@@ -48,7 +43,7 @@ function readStore(): StoredMemoryRecord[] {
 
 function writeStore(list: MemoryRecord[]): boolean {
   try {
-    writeJsonFileAtomic(STORE_FILE, list);
+    writeJsonFileAtomic(getMemoriesFile(), list);
     return true;
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -157,7 +152,7 @@ function listSummaries(): MemorySummary[] {
   return [...groups.values()].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
 }
 
-module.exports = {
+export {
   getAll,
   getForConversation,
   add,
@@ -167,5 +162,3 @@ module.exports = {
   clearAll,
   listSummaries,
 };
-
-export {};

@@ -1,10 +1,7 @@
 // 对话上下文存储 —— 按私聊/群聊会话隔离，使用 JSON 文件持久化
 
-const { CONVERSATIONS_FILE } = require('./paths') as { CONVERSATIONS_FILE: string };
-const { readJsonFile, writeJsonFileAtomic } = require('./json-store') as {
-  readJsonFile<T>(_filePath: string, _fallback: T, _validate?: ((_data: unknown) => _data is T) | null): T;
-  writeJsonFileAtomic(_filePath: string, _data: unknown): void;
-};
+import { getConversationsFile } from './paths.js';
+import { readJsonFile, writeJsonFileAtomic } from './json-store.js';
 
 type ConversationEvent = {
   group_id?: number | string | null;
@@ -42,9 +39,6 @@ type GeminiContent = {
   parts: Array<Record<string, unknown>>;
 };
 
-// conversations.json 位于项目根目录
-const STORE_FILE = CONVERSATIONS_FILE;
-
 /**
  * 根据 OneBot 事件生成会话 key。
  * 私聊：private:${user_id}；群聊：group:${group_id}
@@ -59,7 +53,7 @@ function getConversationKey(event: ConversationEvent): string {
  * 安全读取全部历史；文件不存在或解析失败时返回空对象。
  */
 function readStore(): ConversationStoreData {
-  return readJsonFile<ConversationStoreData>(STORE_FILE, {}, (data): data is ConversationStoreData => {
+  return readJsonFile<ConversationStoreData>(getConversationsFile(), {}, (data): data is ConversationStoreData => {
     return Boolean(data) && typeof data === 'object' && !Array.isArray(data);
   });
 }
@@ -69,7 +63,7 @@ function readStore(): ConversationStoreData {
  */
 function writeStore(data: ConversationStoreData): boolean {
   try {
-    writeJsonFileAtomic(STORE_FILE, data);
+    writeJsonFileAtomic(getConversationsFile(), data);
     return true;
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -232,7 +226,7 @@ function listHistories() {
     .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
 }
 
-module.exports = {
+export {
   getConversationKey,
   getHistory,
   getRecentTurns,
@@ -241,5 +235,3 @@ module.exports = {
   clearAllHistories,
   listHistories,
 };
-
-export {};

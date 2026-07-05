@@ -2,18 +2,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from '../../lib/api/client'
-import { Card, EmptyState, Loading, ErrorBox, PageHeader, PanelHeader, useToast } from '../../components/UI'
+import { Card, EmptyState, Loading, ErrorBox, PageHeader, useToast } from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Select } from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -31,9 +24,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { PinIcon, RefreshCwIcon, Trash2Icon } from '../../components/Icons'
+import { PinIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from '../../components/Icons'
 
 interface MemoryItem {
   id: number
@@ -180,7 +172,7 @@ export default function Memories() {
   if (error) return <ErrorBox message={error} onRetry={fetchData} />
 
   return (
-    <div>
+    <div className="mx-auto max-w-3xl">
       <PageHeader
         title="个性化记忆"
         subtitle="按私聊和群聊会话 key 隔离保存，模型可通过 create/edit/delete memory 工具主动维护"
@@ -192,128 +184,123 @@ export default function Memories() {
       />
       {ToastEl}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <Card className="gap-0 p-0">
-          <PanelHeader
-            title="记忆列表"
-            description="私聊使用 private:QQ，群聊使用 group:群号。"
-            meta={`${shown.length} / ${items.length} 条`}
-            action={
-              <>
-              <Select value={filterKey} onValueChange={setFilterKey}>
-                <SelectTrigger className="w-[220px]">
-                  <SelectValue placeholder="全部会话" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_MEMORY_KEYS}>全部会话</SelectItem>
-                  {keys.map((key) => (
-                    <SelectItem key={key} value={key}>{getKeyLabel(key)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={handleClearKey}
-                disabled={!activeFilterKey}
-              >
-                <Trash2Icon className="h-3.5 w-3.5" />
-                清空此会话
-              </Button>
-              </>
-            }
-          />
-
-          {shown.length === 0 ? (
-            <EmptyState
-              icon={PinIcon}
-              title="暂无记忆"
-              description={activeFilterKey ? '这个会话暂时没有记忆记录。' : '模型创建记忆或手动添加后会展示在这里。'}
-            />
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {shown.map((memory) => (
-                <div key={memory.id} className="px-5 py-4 transition hover:bg-slate-50">
-                  <div className="mb-2 flex flex-col gap-1 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0 truncate font-mono">#{memory.id} · {memory.conversationKey}</div>
-                    <div className="shrink-0">{formatTime(memory.updated_at || memory.created_at)}</div>
-                  </div>
-                  <div className="whitespace-pre-wrap text-sm leading-6 text-slate-900">
-                    {memory.content}
-                  </div>
-                  <div className="mt-3 flex justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setEditing(memory)}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleDelete(memory)}
-                    >
-                      <Trash2Icon className="h-3.5 w-3.5" /> 删除
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-
-        <Card className="gap-0 p-0">
-          <PanelHeader
-            title="手动添加"
-            description="为指定会话 key 补充一条可被模型读取的记忆。"
-          />
-          <form onSubmit={handleCreate} className="space-y-4 px-5 py-4">
-            <div>
-              <Label className="text-xs font-semibold uppercase tracking-wide text-slate-500">会话 key</Label>
+      <Card className="mb-5 p-4">
+        <form onSubmit={handleCreate}>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+            <div className="min-w-0 flex-1">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                会话 key
+              </label>
               <Input
                 value={newKey}
                 onChange={(e) => setNewKey(e.target.value)}
                 placeholder="group:963688355 或 private:3605900361"
-                className="mt-2 h-9 font-mono text-sm"
+                className="mt-1.5 h-9 font-mono text-sm"
               />
-              <div className="mt-2 flex flex-wrap gap-2">
-                {keys.slice(0, 6).map((key) => (
-                  <Button
-                    key={key}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setNewKey(key)}
-                  >
-                    {getKeyLabel(key)}
-                  </Button>
-                ))}
-              </div>
             </div>
-            <div>
-              <Label className="text-xs font-semibold uppercase tracking-wide text-slate-500">记忆内容</Label>
+            <div className="min-w-0 flex-[2]">
+              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                记忆内容
+              </label>
               <Textarea
                 value={newContent}
                 onChange={(e) => setNewContent(e.target.value)}
-                rows={6}
+                rows={2}
                 placeholder="例如：用户喜欢直接简短的回答，不喜欢客服腔"
-                className="mt-2"
+                className="mt-1.5 min-h-[60px]"
               />
             </div>
-            <Button type="submit" disabled={saving} className="w-full">
-              {saving ? '保存中...' : '添加记忆'}
+            <Button type="submit" disabled={saving} className="w-full shrink-0 lg:w-auto">
+              {saving ? '保存中...' : <><PlusIcon className="h-4 w-4" /> 添加</>}
             </Button>
-          </form>
-        </Card>
+          </div>
+
+          {keys.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+              {keys.slice(0, 6).map((key) => (
+                <Button
+                  key={key}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setNewKey(key)}
+                >
+                  {getKeyLabel(key)}
+                </Button>
+              ))}
+            </div>
+          )}
+        </form>
+      </Card>
+
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-sm text-muted-foreground">
+          共 {shown.length} 条记忆
+          {activeFilterKey && ` · ${getKeyLabel(activeFilterKey)}`}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={filterKey}
+            onValueChange={setFilterKey}
+            placeholder="全部会话"
+            options={[
+              { value: ALL_MEMORY_KEYS, label: '全部会话' },
+              ...keys.map((key) => ({ value: key, label: getKeyLabel(key) })),
+            ]}
+            className="w-full sm:w-[220px]"
+          />
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleClearKey}
+            disabled={!activeFilterKey}
+          >
+            <Trash2Icon className="h-3.5 w-3.5" /> 清空此会话
+          </Button>
+        </div>
       </div>
 
-      {/* 编辑 Dialog */}
+      {shown.length === 0 ? (
+        <EmptyState
+          icon={PinIcon}
+          title="暂无记忆"
+          description={activeFilterKey ? '这个会话暂时没有记忆记录。' : '模型创建记忆或手动添加后会展示在这里。'}
+        />
+      ) : (
+        <div className="space-y-3">
+          {shown.map((memory) => (
+            <Card key={memory.id} className="p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="font-mono text-xs font-medium text-muted-foreground">
+                    #{memory.id} · {getKeyLabel(memory.conversationKey)}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {formatTime(memory.updated_at || memory.created_at)}
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setEditing(memory)}>
+                    编辑
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={() => handleDelete(memory)}>
+                    <Trash2Icon className="h-3.5 w-3.5" /> 删除
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground">
+                {memory.content}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
       <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null) }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>编辑记忆 #{editing?.id}</DialogTitle>
-            <DialogDescription className="font-mono text-xs text-slate-400">
+            <DialogDescription className="font-mono text-xs text-muted-foreground">
               {editing?.conversationKey}
             </DialogDescription>
           </DialogHeader>
@@ -333,14 +320,13 @@ export default function Memories() {
         </DialogContent>
       </Dialog>
 
-      {/* 删除确认 */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除</AlertDialogTitle>
             <AlertDialogDescription>
               确定删除这条记忆吗？<br />
-              <span className="mt-2 block text-xs text-slate-500">{deleteTarget?.content}</span>
+              <span className="mt-2 block text-xs text-muted-foreground">{deleteTarget?.content}</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -354,7 +340,6 @@ export default function Memories() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 清空会话确认 */}
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

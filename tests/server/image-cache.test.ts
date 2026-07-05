@@ -1,15 +1,13 @@
-declare const require: any;
-declare const process: any;
-declare const Buffer: any;
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const http = require('node:http');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+
+import * as ai from '../../lib/server/ai.js';
+import * as imageCache from '../../lib/server/image-cache.js';
 
 process.env.QQ_BOT_ALLOW_LOCAL_IMAGE_FETCH = '1';
-
-const ai = require('../../lib/server/ai');
-const imageCache = require('../../lib/server/image-cache');
 
 const ONE_BY_ONE_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
@@ -22,7 +20,7 @@ type ImageServerHandle = {
 };
 
 async function startImageServer(): Promise<ImageServerHandle> {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
     if (req.url === '/cached.png') {
       res.writeHead(200, { 'content-type': 'image/png' });
       res.end(ONE_BY_ONE_PNG);
@@ -31,11 +29,11 @@ async function startImageServer(): Promise<ImageServerHandle> {
     res.writeHead(404);
     res.end('not found');
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const { port } = server.address() as { port: number };
   return {
     url: `http://127.0.0.1:${port}/cached.png`,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };
 }
 
@@ -56,11 +54,11 @@ test('AI image input can use local cache after source URL is gone', async () => 
   await imageServer.close();
 
   const body = await ai.buildRequestBody(raw, [], { ai_filter_stickers: true });
-  const last = body.contents.at(-1);
+  const last = body.contents.at(-1)!;
   assert.equal(last.role, 'user');
   assert.equal(last.parts.length, 2, 'cached image should still be attached without fetching source URL');
-  assert.equal(last.parts[1].inline_data.mime_type, 'image/png');
-  assert.equal(last.parts[1].inline_data.data, ONE_BY_ONE_PNG.toString('base64'));
+  assert.equal((last.parts[1] as any).inline_data.mime_type, 'image/png');
+  assert.equal((last.parts[1] as any).inline_data.data, ONE_BY_ONE_PNG.toString('base64'));
 });
 
 test('image URL validation blocks local addresses unless explicitly enabled', async () => {
@@ -83,4 +81,3 @@ test('default image allowlist includes NapCat QQ multimedia host', () => {
   assert.equal(imageCache.hostMatchesAllowedSuffix('evil-nt.qq.com.cn.example.com'), false);
 });
 
-export {};

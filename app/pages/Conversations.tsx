@@ -1,7 +1,7 @@
 // 上下文管理页 —— 查看和清理按会话隔离的 AI 历史
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api/client'
-import { Card, EmptyState, Loading, ErrorBox, PageHeader, PanelHeader, useToast } from '../../components/UI'
+import { Card, EmptyState, Loading, ErrorBox, PageHeader, useToast } from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
@@ -14,15 +14,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { BrainIcon, RefreshCwIcon, Trash2Icon } from '../../components/Icons'
+import { BrainIcon, RefreshCwIcon, Trash2Icon, UserIcon, UsersIcon } from '../../components/Icons'
+import { cn } from '@/lib/utils'
 import type { ConversationSummary } from '../../lib/shared/types'
 
 function formatTime(value: string | undefined) {
@@ -47,6 +40,7 @@ export default function Conversations() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmAllOpen, setConfirmAllOpen] = useState(false)
   const [confirmAllStep2, setConfirmAllStep2] = useState(false)
+  const [pendingClearKey, setPendingClearKey] = useState<string | null>(null)
   const { success, error: toastError, ToastEl } = useToast()
 
   const fetchData = async () => {
@@ -95,8 +89,6 @@ export default function Conversations() {
       setConfirmAllStep2(false)
     }
   }
-
-  const [pendingClearKey, setPendingClearKey] = useState<string | null>(null)
 
   if (loading) return <Loading text="加载上下文..." />
   if (error) return <ErrorBox message={error} onRetry={fetchData} />
@@ -148,7 +140,6 @@ export default function Conversations() {
       />
       {ToastEl}
 
-      {/* 二次确认对话框 */}
       <AlertDialog open={confirmAllStep2} onOpenChange={setConfirmAllStep2}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -172,103 +163,110 @@ export default function Conversations() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Card className="gap-0 p-0">
-        <PanelHeader
-          title="会话列表"
-          description="私聊和每个群聊的上下文独立保存，互不串线。"
-          meta={`${items.length} 个`}
+      {items.length === 0 ? (
+        <EmptyState
+          icon={BrainIcon}
+          title="暂无上下文历史"
+          description="AI 回复产生对话历史后，这里会按会话 key 展示。"
         />
-        {items.length === 0 ? (
-          <EmptyState
-            icon={BrainIcon}
-            title="暂无上下文历史"
-            description="AI 回复产生对话历史后，这里会按会话 key 展示。"
-          />
-        ) : (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>会话</TableHead>
-                  <TableHead>Key</TableHead>
-                  <TableHead>消息数量 / 轮数</TableHead>
-                  <TableHead>更新时间</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.key} className="hover:bg-slate-50">
-                    <TableCell className="whitespace-nowrap text-sm font-semibold text-slate-950">
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {items.map((item) => {
+            const isGroup = item.key.startsWith('group:')
+            return (
+              <Card key={item.key} className="flex flex-col p-4">
+                <div className="flex items-start gap-3">
+                  <div
+                    className={cn(
+                      'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
+                      isGroup
+                        ? 'bg-emerald-500 text-emerald-50'
+                        : 'bg-primary/10 text-primary'
+                    )}
+                  >
+                    {isGroup ? <UsersIcon className="h-5 w-5" /> : <UserIcon className="h-5 w-5" />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-foreground">
                       {getKeyLabel(item.key)}
-                    </TableCell>
-                    <TableCell className="max-w-[280px] truncate font-mono text-xs text-slate-500">
+                    </div>
+                    <div className="mt-0.5 font-mono text-xs text-muted-foreground">
                       {item.key}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-sm text-slate-700">
-                      {(item.turns || 0) * 2} 条 / {item.turns || 0} 轮
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-sm text-slate-500">
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="rounded-md bg-secondary px-3 py-2">
+                    <div className="text-xs text-muted-foreground">消息 / 轮数</div>
+                    <div className="font-medium text-foreground">
+                      {(item.turns || 0) * 2} / {item.turns || 0}
+                    </div>
+                  </div>
+                  <div className="rounded-md bg-secondary px-3 py-2">
+                    <div className="text-xs text-muted-foreground">更新时间</div>
+                    <div className="font-medium text-foreground">
                       {formatTime(item.updated_at)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <AlertDialog
-                        open={pendingClearKey === item.key && confirmOpen}
-                        onOpenChange={(open) => {
-                          if (!open) {
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <AlertDialog
+                    open={pendingClearKey === item.key && confirmOpen}
+                    onOpenChange={(open) => {
+                      if (!open) {
+                        setConfirmOpen(false)
+                        setPendingClearKey(null)
+                      }
+                    }}
+                  >
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => {
+                          setPendingClearKey(item.key)
+                          setConfirmOpen(true)
+                        }}
+                        disabled={clearingKey === item.key}
+                      >
+                        <Trash2Icon className="h-3.5 w-3.5" />
+                        {clearingKey === item.key ? '清空中...' : '清空'}
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>确认清空</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          确定清空「{getKeyLabel(item.key)}」的上下文吗？
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel
+                          onClick={() => {
                             setConfirmOpen(false)
                             setPendingClearKey(null)
-                          }
-                        }}
-                      >
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => {
-                              setPendingClearKey(item.key)
-                              setConfirmOpen(true)
-                            }}
-                            disabled={clearingKey === item.key}
-                          >
-                            <Trash2Icon className="h-3.5 w-3.5" />
-                            {clearingKey === item.key ? '清空中...' : '清空'}
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>确认清空</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              确定清空「{getKeyLabel(item.key)}」的上下文吗？
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel
-                              onClick={() => {
-                                setConfirmOpen(false)
-                                setPendingClearKey(null)
-                              }}
-                            >
-                              取消
-                            </AlertDialogCancel>
-                            <AlertDialogAction
-                              variant="destructive"
-                              onClick={() => handleClearOne(item.key)}
-                              disabled={clearingKey === item.key}
-                            >
-                              {clearingKey === item.key ? '清空中...' : '确认清空'}
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </Card>
+                          }}
+                        >
+                          取消
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                          variant="destructive"
+                          onClick={() => handleClearOne(item.key)}
+                          disabled={clearingKey === item.key}
+                        >
+                          {clearingKey === item.key ? '清空中...' : '确认清空'}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

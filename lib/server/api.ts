@@ -3,7 +3,7 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import type { Server as HttpServer } from 'http';
 import type { Session, SessionData } from 'express-session';
-import type { OneBotWSClient } from './ws-client';
+import type { OneBotWSClient } from './ws-client.js';
 
 declare module 'express-session' {
   interface SessionData {
@@ -11,21 +11,19 @@ declare module 'express-session' {
   }
 }
 
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
-const http = require('http');
-const express = require('express');
-const session = require('express-session');
-const cors = require('cors');
-const cookieParser = require('cookie-parser');
+import path from 'path';
+import fs from 'fs';
+import crypto from 'crypto';
+import http from 'http';
+import express from 'express';
+import session from 'express-session';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
 
-const { loadConfig, saveConfig } = require('./config');
-const { getMessages, getChats } = require('./message-store');
-const conversationStore = require('./conversation-store');
-const memoryStore = require('./memory-store');
-const { FileSessionStore } = require('./session-store');
-const {
+import { loadConfig, saveConfig } from './config.js';
+import { messageStore, conversationStore, memoryStore } from './store/index.js';
+import { FileSessionStore } from './session-store.js';
+import {
   CONFIG_FILE,
   CONVERSATIONS_FILE,
   DATA_DIR,
@@ -36,7 +34,7 @@ const {
   PANEL_DIST,
   SERVER_LOG_FILE,
   SESSIONS_FILE,
-} = require('./paths');
+} from './paths.js';
 
 type ConfigRecord = Record<string, any>;
 
@@ -494,12 +492,12 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
       req.query.group_id !== undefined
         ? Number(req.query.group_id)
         : null;
-    const msgs = getMessages(limit, userId, groupId);
+    const msgs = messageStore.getMessages(limit, userId, groupId);
     return res.json({ messages: msgs, total: msgs.length });
   });
 
   app.get('/api/chats', requireAuth, (req, res) => {
-    const chats = getChats();
+    const chats = messageStore.getChats();
     return res.json({ chats, total: chats.length });
   });
 
@@ -604,16 +602,14 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
   return app;
 }
 
-async function setupApp(client: OneBotWSClient, options: ConfigureOptions = {}) {
+export async function setupApp(client: OneBotWSClient, options: ConfigureOptions = {}) {
   const app = express();
   return configureApp(app, client, options);
 }
 
-async function createServerApp(client: OneBotWSClient): Promise<{ app: Express; httpServer: HttpServer }> {
+export async function createServerApp(client: OneBotWSClient): Promise<{ app: Express; httpServer: HttpServer }> {
   const app = express();
   const httpServer = http.createServer(app);
   await configureApp(app, client, { httpServer });
   return { app, httpServer };
 }
-
-module.exports = { setupApp, createServerApp };

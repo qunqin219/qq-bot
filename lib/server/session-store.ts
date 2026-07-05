@@ -1,12 +1,9 @@
-const session = require('express-session') as any;
-const { readJsonFile, writeJsonFileAtomic } = require('./json-store') as {
-  readJsonFile<T>(_filePath: string, _fallback: T, _validate?: ((_data: unknown) => _data is T) | null): T;
-  writeJsonFileAtomic(_filePath: string, _data: unknown): void;
-};
+import session from 'express-session';
+import { readJsonFile, writeJsonFileAtomic } from './json-store.js';
 
-type SessionData = Record<string, any>;
-type SessionMap = Record<string, SessionData>;
-type StoreCallback = (_err?: unknown, _session?: SessionData | null) => void;
+type StoredSession = Record<string, any>;
+type SessionMap = Record<string, StoredSession>;
+type StoreCallback = (err?: unknown, session?: session.SessionData | null) => void;
 
 const DEFAULT_TOUCH_WRITE_INTERVAL_MS = 60_000;
 
@@ -16,14 +13,14 @@ function getTouchWriteIntervalMs(): number {
   return configured;
 }
 
-function getCookieExpiresMs(sess: SessionData | null | undefined): number | null {
+function getCookieExpiresMs(sess: StoredSession | null | undefined): number | null {
   const expires = sess?.cookie?.expires;
   if (!expires) return null;
   const time = expires instanceof Date ? expires.getTime() : Date.parse(String(expires));
   return Number.isFinite(time) ? time : null;
 }
 
-class FileSessionStore extends session.Store {
+export class FileSessionStore extends session.Store {
   private filePath: string;
 
   constructor(filePath: string) {
@@ -41,7 +38,7 @@ class FileSessionStore extends session.Store {
     writeJsonFileAtomic(this.filePath, sessions);
   }
 
-  _isExpired(sess: SessionData | null | undefined): boolean {
+  _isExpired(sess: StoredSession | null | undefined): boolean {
     const expires = sess?.cookie?.expires;
     return expires ? Date.parse(expires) <= Date.now() : false;
   }
@@ -67,13 +64,13 @@ class FileSessionStore extends session.Store {
         cb(null, null);
         return;
       }
-      cb(null, sess);
+      cb(null, sess as session.SessionData | null);
     } catch (e) {
       cb(e);
     }
   }
 
-  set(sid: string, sess: SessionData, cb: StoreCallback = () => {}): void {
+  set(sid: string, sess: StoredSession, cb: StoreCallback = () => {}): void {
     try {
       const sessions = this._read();
       this._prune(sessions);
@@ -96,7 +93,7 @@ class FileSessionStore extends session.Store {
     }
   }
 
-  touch(sid: string, sess: SessionData, cb: StoreCallback = () => {}): void {
+  touch(sid: string, sess: StoredSession, cb: StoreCallback = () => {}): void {
     try {
       const sessions = this._read();
       const pruned = this._prune(sessions);
@@ -130,7 +127,3 @@ class FileSessionStore extends session.Store {
     }
   }
 }
-
-module.exports = { FileSessionStore };
-
-export {};

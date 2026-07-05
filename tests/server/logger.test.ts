@@ -1,9 +1,7 @@
-declare const require: any;
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-
-const { beijingTimestamp, formatConsoleLine } = require('../../lib/server/logger');
+import { beijingTimestamp, formatConsoleLine } from '../../lib/server/logger.js';
 
 test('logger formats timestamps in Beijing time', () => {
   const text = beijingTimestamp(new Date('2026-06-30T12:34:56.789Z'));

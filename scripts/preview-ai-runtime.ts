@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 
-declare const require: any;
-declare const process: any;
-
-const botCore = require('../lib/server/bot-core');
-const { loadConfig } = require('../lib/server/config');
+import * as botCore from '../lib/server/bot-core.js';
+import { loadConfig } from '../lib/server/config.js';
 
 type PreviewConfig = Record<string, any> & {
   admins?: Array<number | string>;
@@ -79,7 +76,7 @@ async function main() {
 
   const client = {
     connected: true,
-    getGroupMemberInfo: async (_groupId, queriedUserId) => ({
+    getGroupMemberInfo: async (_groupId: number | string, queriedUserId: number | string) => ({
       status: 'ok',
       data: {
         user_id: queriedUserId,
@@ -91,7 +88,7 @@ async function main() {
     getMsg: async () => ({ status: 'failed', data: null }),
   };
 
-  const preview = await botCore.buildAiRuntimePreview({ event, client, cfg });
+  const preview = await botCore.buildAiRuntimePreview({ event, client: client as any, cfg });
   const body = preview.requestBody;
   const toolNames = (body.tools || []).flatMap((tool: Record<string, any>) => {
     if (Array.isArray(tool.functionDeclarations)) {
@@ -149,5 +146,3 @@ main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });
-
-export {};

@@ -1,14 +1,15 @@
-declare const require: any;
-declare const process: any;
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+import { createServerApp } from '../../lib/server/api.js';
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from '../../lib/server/config.js';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-bot-api-test-'));
 process.env.QQ_BOT_CONFIG_FILE = path.join(tempRoot, 'config.json');
+process.env.QQ_BOT_STORE_BACKEND = 'json';
 process.env.QQ_BOT_MESSAGES_FILE = path.join(tempRoot, 'messages.json');
 process.env.QQ_BOT_CONVERSATIONS_FILE = path.join(tempRoot, 'conversations.json');
 process.env.QQ_BOT_MEMORIES_FILE = path.join(tempRoot, 'memories.json');
@@ -18,9 +19,6 @@ process.env.QQ_BOT_COOKIE_SECURE = '0';
 process.env.QQ_BOT_PANEL_USERNAME = 'admin';
 process.env.QQ_BOT_PANEL_PASSWORD = 'panel-secret';
 process.env.QQ_BOT_SESSION_SECRET = 'test-session-secret-that-is-long-enough';
-
-const { createServerApp } = require('../../lib/server/api');
-const { DEFAULT_CONFIG, loadConfig, saveConfig } = require('../../lib/server/config');
 
 type RequestOptions = {
   method?: string;
@@ -37,13 +35,13 @@ type JsonResponse = {
 
 async function withServer(fn: (baseUrl: string) => Promise<void>): Promise<void> {
   const client = { connected: false };
-  const { httpServer } = await createServerApp(client);
-  await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+  const { httpServer } = await createServerApp(client as any);
+  await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve()));
   const { port } = httpServer.address() as { port: number };
   try {
     return await fn(`http://127.0.0.1:${port}`);
   } finally {
-    await new Promise((resolve) => httpServer.close(resolve));
+    await new Promise<void>((resolve, reject) => httpServer.close((err) => (err ? reject(err) : resolve())));
   }
 }
 
@@ -119,4 +117,3 @@ test('config API sanitizes secrets and preserves API key on empty update', async
   });
 });
 
-export {};

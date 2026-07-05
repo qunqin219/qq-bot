@@ -1,13 +1,13 @@
 // 主入口 —— 同时启动 OneBot WS 客户端和 Express 后端
 
 import type { Server as HttpServer } from 'http';
-import type { OneBotWSClient as OneBotWSClientType } from './ws-client';
+import type { OneBotWSClient as OneBotWSClientType } from './ws-client.js';
 
-const { installServerLogger, flushServerLogger } = require('./logger');
-const { OneBotWSClient } = require('./ws-client');
-const { loadConfig } = require('./config');
-const { createServerApp } = require('./api');
-const { SERVER_LOG_FILE } = require('./paths');
+import { installServerLogger, flushServerLogger } from './logger.js';
+import { OneBotWSClient } from './ws-client.js';
+import { loadConfig } from './config.js';
+import { createServerApp } from './api.js';
+import { SERVER_LOG_FILE } from './paths.js';
 
 const PORT = Number(process.env.PORT || 8001);
 

@@ -1,14 +1,14 @@
-import fs = require('fs');
-import path = require('path');
+import fs from 'fs';
+import path from 'path';
 import { randomUUID } from 'crypto';
 
 type JsonValidator<T> = (data: unknown) => data is T;
 
-function ensureParentDir(filePath: string): void {
+export function ensureParentDir(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
-function readJsonFile<T>(filePath: string, fallback: T, validate: JsonValidator<T> | null = null): T {
+export function readJsonFile<T>(filePath: string, fallback: T, validate: JsonValidator<T> | null = null): T {
   try {
     if (!fs.existsSync(filePath)) return fallback;
     const raw = fs.readFileSync(filePath, 'utf-8');
@@ -23,11 +23,9 @@ function readJsonFile<T>(filePath: string, fallback: T, validate: JsonValidator<
   }
 }
 
-function writeJsonFileAtomic(filePath: string, data: unknown): void {
+export function writeJsonFileAtomic(filePath: string, data: unknown): void {
   ensureParentDir(filePath);
   const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
   fs.renameSync(tmpPath, filePath);
 }
-
-module.exports = { ensureParentDir, readJsonFile, writeJsonFileAtomic };

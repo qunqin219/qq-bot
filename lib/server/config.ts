@@ -1,14 +1,8 @@
 // 配置管理 —— JSON 文件持久化管理员列表等配置
 
-const { CONFIG_FILE } = require('./paths') as { CONFIG_FILE: string };
-const {
-  DEFAULT_AI_SYSTEM_PROMPT,
-  normalizeSystemPrompt,
-} = require('../shared/system-prompt') as typeof import('../shared/system-prompt');
-const { readJsonFile, writeJsonFileAtomic } = require('./json-store') as {
-  readJsonFile<T>(_filePath: string, _fallback: T, _validate?: ((_data: unknown) => _data is T) | null): T;
-  writeJsonFileAtomic(_filePath: string, _data: unknown): void;
-};
+import { CONFIG_FILE } from './paths.js';
+import { DEFAULT_AI_SYSTEM_PROMPT, normalizeSystemPrompt } from '../shared/system-prompt.js';
+import { readJsonFile, writeJsonFileAtomic } from './json-store.js';
 
 type BotConfig = {
   admins: Array<number | string>;
@@ -20,7 +14,9 @@ type BotConfig = {
   panel_password: string;
   session_secret: string;
   ai_enabled: boolean;
+  ai_provider: string;
   ai_base_url: string;
+  store_backend: string;
   ai_api_key: string;
   ai_model: string;
   ai_system_prompt: string;
@@ -44,7 +40,7 @@ type BotConfig = {
 // 配置文件位于项目根目录，默认不提交到仓库。
 
 // 默认配置
-const DEFAULT_CONFIG: BotConfig = {
+export const DEFAULT_CONFIG: BotConfig = {
   admins: [],                            // 管理员 QQ 列表；生产环境写入本地 config.json
   command_prefix: '/',                    // 命令前缀
   napcat_ws: 'ws://127.0.0.1:3001',       // NapCat WebSocket 地址
@@ -56,6 +52,8 @@ const DEFAULT_CONFIG: BotConfig = {
   session_secret: '',
   // ── AI 回复配置（Gemini API） ─────────────────────
   ai_enabled: false,                      // 是否启用 AI 回复
+  ai_provider: 'gemini',                  // AI 提供商：gemini（未来可扩展 openai/claude）
+  store_backend: 'sqlite',                // 存储后端：sqlite（默认）/ json。实际由 QQ_BOT_STORE_BACKEND 环境变量控制
   ai_base_url: 'https://generativelanguage.googleapis.com/v1beta', // Gemini API 基础地址
   ai_api_key: '',                         // Gemini API Key
   ai_model: 'gemini-3.5-flash',           // 使用的模型名称
@@ -85,7 +83,7 @@ function isConfigObject(data: unknown): data is Partial<BotConfig> & Record<stri
   return Boolean(data) && typeof data === 'object' && !Array.isArray(data);
 }
 
-function loadConfig(): BotConfig {
+export function loadConfig(): BotConfig {
   const cfg = readJsonFile<Partial<BotConfig> & Record<string, unknown> | null>(CONFIG_FILE, null, isConfigObject);
   if (cfg) {
     // 合并默认值
@@ -103,14 +101,10 @@ function loadConfig(): BotConfig {
 /**
  * 保存配置到 JSON 文件。
  */
-function saveConfig(cfg: Partial<BotConfig> & Record<string, unknown>): void {
+export function saveConfig(cfg: Partial<BotConfig> & Record<string, unknown>): void {
   // 不再主动写入旧固定自动回复字段；已有 config.json 中的旧字段仅在读取合并时兼容。
   const cleanCfg = { ...cfg };
   delete cleanCfg.auto_reply;
   delete cleanCfg.reply_text;
   writeJsonFileAtomic(CONFIG_FILE, cleanCfg);
 }
-
-module.exports = { loadConfig, saveConfig, DEFAULT_CONFIG };
-
-export {};

@@ -1,10 +1,7 @@
 // 消息存储 —— 持久化 OneBot 事件消息，供面板查看和群聊上下文构建
 
-const { MESSAGES_FILE } = require('./paths') as { MESSAGES_FILE: string };
-const { readJsonFile, writeJsonFileAtomic } = require('./json-store') as {
-  readJsonFile<T>(_filePath: string, _fallback: T, _validate?: ((_data: unknown) => _data is T) | null): T;
-  writeJsonFileAtomic(_filePath: string, _data: unknown): void;
-};
+import { getMessagesFile } from './paths.js';
+import { readJsonFile, writeJsonFileAtomic } from './json-store.js';
 
 type OneBotSender = {
   nickname?: string;
@@ -51,8 +48,6 @@ type ChatSummary = {
   name: string;
 };
 
-// 消息存储文件位于项目根目录
-const STORE_FILE = MESSAGES_FILE;
 // 默认保留最近 2 万条，避免长期运行时单个 JSON 文件无限增长。
 const MAX_MESSAGES = Math.max(1000, Math.min(200000, Number(process.env.QQ_BOT_MAX_STORED_MESSAGES || 20000)));
 const DEFAULT_READ_LIMIT = 50;
@@ -62,14 +57,14 @@ const SEARCH_SCAN_LIMIT = 20000;
  * 加载所有缓存消息。文件里保持“最新在前”的顺序。
  */
 function _load(): StoredMessage[] {
-  return readJsonFile<StoredMessage[]>(STORE_FILE, [], Array.isArray);
+  return readJsonFile<StoredMessage[]>(getMessagesFile(), [], Array.isArray);
 }
 
 /**
  * 保存消息到文件。
  */
 function _save(msgs: StoredMessage[]): void {
-  writeJsonFileAtomic(STORE_FILE, msgs);
+  writeJsonFileAtomic(getMessagesFile(), msgs);
 }
 
 function normalizeMessage(event: OneBotMessageEvent): StoredMessage {
@@ -230,12 +225,10 @@ function getChats(): ChatSummary[] {
   return Object.values(chats);
 }
 
-module.exports = {
+export {
   addMessage,
   getMessages,
   searchMessages,
   getChats,
   MAX_MESSAGES,
 };
-
-export {};

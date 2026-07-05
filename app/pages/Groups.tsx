@@ -1,31 +1,23 @@
 // 群管理页 —— 群白名单：设置 Bot 仅在指定群回复
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api/client'
-import { Card, EmptyState, Loading, ErrorBox, PageHeader, PanelHeader, useToast } from '../../components/UI'
+import { Card, EmptyState, Loading, ErrorBox, PageHeader, useToast } from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Badge } from '@/components/ui/badge'
 import { RefreshCwIcon, SaveIcon, UsersIcon } from '../../components/Icons'
 import type { GroupInfo } from '../../lib/shared/types'
+
 export default function Groups() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  // 配置状态
   const [filterEnabled, setFilterEnabled] = useState(false)
   const [activeGroups, setActiveGroups] = useState<Array<number | string>>([])
 
-  // 实时群列表
   const [groups, setGroups] = useState<GroupInfo[]>([])
   const [connected, setConnected] = useState(false)
 
@@ -106,130 +98,112 @@ export default function Groups() {
       />
       {ToastEl}
 
-      <div className="space-y-5">
-        {/* 启用开关 */}
-        <Card className="gap-0 p-0">
-          <div className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <Card className="mb-5 p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <UsersIcon className="h-5 w-5" />
+            </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <div className="text-base font-semibold text-slate-950">
-                  群白名单
-                </div>
-                <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${filterEnabled ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                <h2 className="text-base font-semibold text-foreground">群白名单</h2>
+                <Badge variant={filterEnabled ? 'default' : 'secondary'}>
                   {filterEnabled ? '已启用' : '未启用'}
-                </span>
+                </Badge>
               </div>
-              <div className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-muted-foreground">
                 开启后仅回复勾选群；关闭时所有群均可触发。私聊不受此开关限制。
-              </div>
+              </p>
             </div>
-            <Switch
-              checked={filterEnabled}
-              onCheckedChange={setFilterEnabled}
-            />
           </div>
-          {filterEnabled && activeGroups.length === 0 && (
-            <Alert className="mx-5 mb-4 border-amber-200 bg-amber-50 text-amber-700">
-              <AlertDescription>
-                白名单为空：当前会忽略所有群消息。请在下方勾选至少一个群，或关闭白名单。
-              </AlertDescription>
-            </Alert>
-          )}
-        </Card>
 
-        {/* 群列表 */}
-        <Card className="gap-0 p-0">
-          <PanelHeader
-            title="群列表"
-            description={connected ? '来自 NapCat 的实时群列表。' : 'Bot 未连接 NapCat，当前无法同步实时群列表。'}
-            meta={`共 ${groups.length} 个 · 已选 ${activeGroups.length} 个`}
-            action={
-              <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={selectAll}
-                disabled={groups.length === 0}
+          <div className="flex flex-wrap items-center gap-2">
+            <Switch checked={filterEnabled} onCheckedChange={setFilterEnabled} />
+            <Button variant="outline" size="sm" onClick={selectAll} disabled={groups.length === 0}>
+              全选
+            </Button>
+            <Button variant="outline" size="sm" onClick={selectNone} disabled={activeGroups.length === 0}>
+              全不选
+            </Button>
+          </div>
+        </div>
+
+        {filterEnabled && activeGroups.length === 0 && (
+          <Alert variant="destructive" className="mt-4">
+            <AlertDescription>
+              白名单为空：当前会忽略所有群消息。请在下方勾选至少一个群，或关闭白名单。
+            </AlertDescription>
+          </Alert>
+        )}
+      </Card>
+
+      {!connected && (
+        <Alert className="mb-5 border-border bg-muted text-muted-foreground">
+          <AlertDescription>
+            Bot 未连接 NapCat，无法获取实时群列表。请等待连接后刷新。
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {groups.length === 0 ? (
+        <EmptyState
+          icon={UsersIcon}
+          title={connected ? '暂无群列表' : '等待 Bot 连接'}
+          description={connected ? '当前账号没有可展示的群，刷新后会重新同步。' : 'NapCat 连接成功后，这里会显示可勾选的群列表。'}
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {groups.map((g) => {
+            const gid = g.group_id
+            const checked = activeGroups.includes(gid)
+            return (
+              <div
+                key={gid}
+                role="button"
+                tabIndex={0}
+                onClick={() => toggleGroup(gid)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    toggleGroup(gid)
+                  }
+                }}
+                className="cursor-pointer"
               >
-                全选
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={selectNone}
-                disabled={activeGroups.length === 0}
-              >
-                全不选
-              </Button>
-              </>
-            }
-          />
+                <Card className={`p-4 transition ${checked ? 'ring-1 ring-primary/30 bg-primary/[0.02]' : ''}`}>
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
+                      <UsersIcon className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-foreground">
+                        {g.group_name || '(未命名)'}
+                      </div>
+                      <div className="mt-0.5 font-mono text-xs text-muted-foreground">{gid}</div>
+                      <div className="mt-2">
+                        <Badge variant="secondary" className="text-[10px]">
+                          {g.member_count ?? '-'} 成员
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
 
-          {!connected && (
-            <Alert className="mx-5 mt-4 border-slate-200 bg-slate-50 text-slate-600">
-              <AlertDescription>
-                Bot 未连接 NapCat，无法获取实时群列表。请等待连接后刷新。
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {groups.length === 0 ? (
-            <EmptyState
-              icon={UsersIcon}
-              title={connected ? '暂无群列表' : '等待 Bot 连接'}
-              description={connected ? '当前账号没有可展示的群，刷新后会重新同步。' : 'NapCat 连接成功后，这里会显示可勾选的群列表。'}
-            />
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>群名</TableHead>
-                    <TableHead>群号</TableHead>
-                    <TableHead className="text-center">成员数</TableHead>
-                    <TableHead className="text-center">启用</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {groups.map((g) => {
-                    const gid = g.group_id
-                    const checked = activeGroups.includes(gid)
-                    return (
-                      <TableRow
-                        key={gid}
-                        className={checked ? 'bg-slate-50' : ''}
-                      >
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-                              <UsersIcon className="h-4 w-4" />
-                            </span>
-                            <span className="max-w-[360px] truncate font-medium text-slate-950">
-                              {g.group_name || '(未命名)'}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs text-slate-500">
-                          {gid}
-                        </TableCell>
-                        <TableCell className="text-center text-slate-500">
-                          {g.member_count ?? '-'}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={() => toggleGroup(gid)}
-                          />
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </Card>
-      </div>
+                  <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+                    <span className={`text-sm ${checked ? 'text-foreground' : 'text-muted-foreground'}`}>
+                      {checked ? '已启用' : '未启用'}
+                    </span>
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => toggleGroup(gid)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                </Card>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

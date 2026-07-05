@@ -2,8 +2,9 @@
 
 import type { RawData } from 'ws';
 
-const WebSocket = require('ws');
-const { randomUUID } = require('crypto');
+import WebSocket from 'ws';
+import { randomUUID } from 'crypto';
+import * as botCore from './bot-core.js';
 
 type OneBotParams = Record<string, unknown>;
 
@@ -120,9 +121,8 @@ export class OneBotWSClient {
   async _handleData(data: OneBotApiResponse): Promise<void> {
     if (data.post_type) {
       // 事件上报
-      const botCore = require('./bot-core');
       try {
-        await botCore.handleEvent(data, this);
+        await botCore.handleEvent(data as any, this);
       } catch (e) {
         console.error('[WS] 处理事件异常:', e);
       }
@@ -242,5 +242,3 @@ export class OneBotWSClient {
     }
   }
 }
-
-module.exports = { OneBotWSClient };

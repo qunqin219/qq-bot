@@ -2,19 +2,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from '../../lib/api/client'
-import { Card, EmptyState, Loading, ErrorBox, PageHeader, PanelHeader, useToast } from '../../components/UI'
+import { Card, EmptyState, Loading, ErrorBox, PageHeader, useToast } from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Select } from '@/components/ui/select'
 import { CopyIcon, RefreshCwIcon, ScrollTextIcon, SearchIcon } from '../../components/Icons'
 import type { LogsResponse } from '../../lib/shared/types'
+
 const quickFilters = [
   { label: '全部', value: '' },
   { label: 'AI 日志', value: '[AI]' },
@@ -25,7 +19,7 @@ const quickFilters = [
 
 function levelClass(line: string) {
   if (/error|失败|返回错误|sensitive_words|Traceback/i.test(line)) {
-    return 'border-red-200 bg-red-50 text-red-700'
+    return 'border-destructive/20 bg-destructive/10 text-destructive'
   }
   if (/warn|警告|用户要求引用/i.test(line)) {
     return 'border-amber-200 bg-amber-50 text-amber-700'
@@ -37,9 +31,9 @@ function levelClass(line: string) {
     return 'border-blue-200 bg-blue-50 text-blue-800'
   }
   if (/收到消息/i.test(line)) {
-    return 'border-slate-200 bg-slate-100 text-sky-700'
+    return 'border-border bg-secondary text-primary'
   }
-  return 'border-slate-200 bg-slate-50 text-slate-700'
+  return 'border-border bg-secondary text-foreground'
 }
 
 export default function Logs() {
@@ -53,8 +47,8 @@ export default function Logs() {
   const { success, error: toastError, ToastEl } = useToast()
 
   const fetchData = async (next: Record<string, unknown> = {}) => {
-    const nextLimit = next.limit ?? limit
-    const nextQuery = next.query ?? query
+    const nextLimit = (next.limit ?? limit) as number
+    const nextQuery = (next.query ?? query) as string
     setError(null)
     try {
       const resp = await api.getLogs({ limit: nextLimit, q: nextQuery })
@@ -111,45 +105,33 @@ export default function Logs() {
         title="运行日志"
         subtitle={`server.log · ${data.total || 0} 行${data.modified_at ? ` · 更新于 ${new Date(data.modified_at as string).toLocaleString('zh-CN')}` : ''}`}
         action={
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setNewestFirst((v) => !v)}
-            >
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setNewestFirst((v) => !v)}>
               {newestFirst ? '↓ 最新在上' : '↑ 最旧在上'}
             </Button>
             <Button
               variant={autoRefresh ? 'default' : 'outline'}
+              size="sm"
               onClick={() => setAutoRefresh((v) => !v)}
             >
               {autoRefresh ? '自动刷新中' : '自动刷新'}
             </Button>
-            <Button onClick={() => fetchData()}>
+            <Button size="sm" onClick={() => fetchData()}>
               <RefreshCwIcon className="h-4 w-4" /> 刷新
             </Button>
           </div>
         }
       />
 
-      <Card className="mb-5 shrink-0 gap-0 p-0">
-        <PanelHeader
-          title="日志筛选"
-          description="按关键词和尾部行数读取 server.log。"
-          meta={`${visibleLines.length} 行`}
-        />
-        <form onSubmit={submitSearch} className="flex flex-wrap items-end gap-3 px-5 py-4">
-          <div className="min-w-[240px] flex-1">
-            <Label className="text-xs font-semibold uppercase tracking-wide text-slate-500">关键词筛选</Label>
+      <Card className="mb-4 shrink-0 p-3">
+        <form onSubmit={submitSearch} className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-end gap-2">
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="例如 sensitive_words / ToolCall / 收到消息"
-              className="mt-2 h-9"
+              placeholder="关键词筛选，例如 sensitive_words / ToolCall / 收到消息"
+              className="h-9 min-w-[200px] flex-1"
             />
-          </div>
-
-          <div>
-            <Label className="text-xs font-semibold uppercase tracking-wide text-slate-500">最近行数</Label>
             <Select
               value={String(limit)}
               onValueChange={(value) => {
@@ -157,55 +139,52 @@ export default function Logs() {
                 setLimit(nextLimit)
                 fetchData({ limit: nextLimit })
               }}
-            >
-              <SelectTrigger className="mt-2 h-9 w-[120px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {[100, 300, 500, 1000, 2000].map((n) => (
-                  <SelectItem key={n} value={String(n)}>{n} 行</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              options={[100, 300, 500, 1000, 2000].map((n) => ({ value: String(n), label: `${n} 行` }))}
+              className="h-9 w-[120px]"
+            />
+            <Button type="submit" size="sm">
+              <SearchIcon className="h-4 w-4" /> 查询
+            </Button>
+            <Button variant="outline" size="sm" onClick={copyLogs} disabled={!logText}>
+              <CopyIcon className="h-4 w-4" /> 复制
+            </Button>
           </div>
 
-          <Button type="submit">
-            <SearchIcon className="h-4 w-4" /> 查询
-          </Button>
-          <Button
-            variant="outline"
-            onClick={copyLogs}
-            disabled={!logText}
-          >
-            <CopyIcon className="h-4 w-4" /> 复制
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {quickFilters.map((item) => (
+              <Button
+                key={item.label}
+                variant={query === item.value ? 'default' : 'outline'}
+                size="xs"
+                onClick={() => {
+                  setQuery(item.value)
+                  fetchData({ query: item.value })
+                }}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </div>
         </form>
-
-        <div className="flex flex-wrap gap-2 border-t border-slate-100 px-5 py-3">
-          {quickFilters.map((item) => (
-            <Button
-              key={item.label}
-              variant={query === item.value ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => {
-                setQuery(item.value)
-                fetchData({ query: item.value })
-              }}
-            >
-              {item.label}
-            </Button>
-          ))}
-        </div>
       </Card>
 
-      {error && <div className="mb-4"><ErrorBox message={error} onRetry={fetchData} /></div>}
+      {error && (
+        <div className="mb-4 shrink-0">
+          <ErrorBox message={error} onRetry={fetchData} />
+        </div>
+      )}
 
-      <Card className="min-h-0 flex-1 gap-0 overflow-hidden p-0">
-        <PanelHeader
-          title="日志输出"
-          description={newestFirst ? '最新日志显示在上方。' : '最旧日志显示在上方。'}
-          meta={autoRefresh ? '自动刷新中' : '手动刷新'}
-        />
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b border-border px-4 py-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            日志输出
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {visibleLines.length} 行 · {newestFirst ? '最新在上' : '最旧在上'}
+            {autoRefresh && ' · 自动刷新'}
+          </span>
+        </div>
+
         {!visibleLines.length ? (
           <EmptyState
             icon={ScrollTextIcon}
@@ -213,15 +192,17 @@ export default function Logs() {
             description="换一个关键词或扩大最近行数后再查询。"
           />
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            <div className="p-3 font-mono text-xs leading-relaxed">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-muted p-4">
+            <div className="space-y-1 font-mono text-xs leading-relaxed">
               {visibleLines.map((line, idx) => (
                 <div
                   key={`${idx}-${line.slice(0, 30)}`}
-                  className={`mb-1 whitespace-pre-wrap break-words rounded-md border px-3 py-2 ${levelClass(line)}`}
+                  className={`flex gap-3 rounded-md border px-3 py-2 ${levelClass(line)}`}
                 >
-                  <span className="mr-3 select-none text-slate-400">{idx + 1}</span>
-                  {line}
+                  <span className="w-8 shrink-0 select-none text-right text-muted-foreground">
+                    {idx + 1}
+                  </span>
+                  <span className="whitespace-pre-wrap break-words">{line}</span>
                 </div>
               ))}
             </div>

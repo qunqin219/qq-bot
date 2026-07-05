@@ -1,24 +1,23 @@
-declare const require: any;
-declare const process: any;
-declare const Buffer: any;
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const http = require('node:http');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import * as botCore from '../../lib/server/bot-core.js';
+import { DEFAULT_CONFIG } from '../../lib/server/config.js';
+import { addMessage } from '../../lib/server/message-store.js';
+import * as conversationStore from '../../lib/server/conversation-store.js';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-bot-runtime-preview-test-'));
 process.env.QQ_BOT_ALLOW_LOCAL_IMAGE_FETCH = '1';
+process.env.QQ_BOT_STORE_BACKEND = 'json';
 process.env.QQ_BOT_MESSAGES_FILE = path.join(tempRoot, 'messages.json');
 process.env.QQ_BOT_CONVERSATIONS_FILE = path.join(tempRoot, 'conversations.json');
 process.env.QQ_BOT_MEMORIES_FILE = path.join(tempRoot, 'memories.json');
-
-const botCore = require('../../lib/server/bot-core');
-const { DEFAULT_CONFIG } = require('../../lib/server/config');
-const { addMessage } = require('../../lib/server/message-store');
-const conversationStore = require('../../lib/server/conversation-store');
 
 const ONE_BY_ONE_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
@@ -30,7 +29,7 @@ type TestEvent = Record<string, any>;
 type TestClient = Record<string, any>;
 
 async function withImageServer(fn: (imageUrl: string) => Promise<void>): Promise<void> {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
     if (req.url === '/backend-log.png') {
       res.writeHead(200, { 'content-type': 'image/png' });
       res.end(ONE_BY_ONE_PNG);
@@ -39,12 +38,12 @@ async function withImageServer(fn: (imageUrl: string) => Promise<void>): Promise
     res.writeHead(404);
     res.end('not found');
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const { port } = server.address() as { port: number };
   try {
     return await fn(`http://127.0.0.1:${port}/backend-log.png`);
   } finally {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }
 }
 
@@ -109,9 +108,9 @@ test('runtime preview attaches current group image with the text context', async
     assert.match(preview.extraSystemInstruction, /## Memory Tool/);
 
     const tools = preview.requestBody.tools || [];
-    assert.ok(tools.some((tool) => Array.isArray(tool.functionDeclarations)), 'function tools should be present');
-    assert.ok(tools.some((tool) => tool.googleSearch), 'googleSearch should be present');
-    assert.ok(tools.some((tool) => tool.urlContext), 'urlContext should be present');
+    assert.ok(tools.some((tool: Record<string, any>) => Array.isArray(tool.functionDeclarations)), 'function tools should be present');
+    assert.ok(tools.some((tool: Record<string, any>) => tool.googleSearch), 'googleSearch should be present');
+    assert.ok(tools.some((tool: Record<string, any>) => tool.urlContext), 'urlContext should be present');
 
     const declarations = tools.flatMap((tool: Record<string, any>) => tool.functionDeclarations || []);
     const names = declarations.map((item: Record<string, any>) => item.name).sort();
@@ -179,7 +178,7 @@ test('unrelated recent image is not auto-attached when the question is not about
       raw_message: `[CQ:image,file=unrelated.png,url=${imageUrl}]`,
       message: `[CQ:image,file=unrelated.png,url=${imageUrl}]`,
       sender: { nickname: 'momo' },
-    });
+    } as any);
     addMessage({
       post_type: 'message',
       message_type: 'group',
@@ -189,7 +188,7 @@ test('unrelated recent image is not auto-attached when the question is not about
       raw_message: '【【IGN】动画剧集《赛博朋克：边缘行者2》先导预告】https://www.bilibili.com/video/BV1smKX6kED6',
       message: '【【IGN】动画剧集《赛博朋克：边缘行者2》先导预告】https://www.bilibili.com/video/BV1smKX6kED6',
       sender: { nickname: 'qunqin', card: 'qunqin Sleep' },
-    });
+    } as any);
 
     const client = makeClient();
     client.getMsg = async (messageId: number | string) => {
@@ -234,7 +233,7 @@ test('question about a historical image gets a text reference and the read-image
       raw_message: `[CQ:image,file=target.png,url=${imageUrl}]`,
       message: `[CQ:image,file=target.png,url=${imageUrl}]`,
       sender: { nickname: 'momo' },
-    });
+    } as any);
 
     const preview = await botCore.buildAiRuntimePreview({
       event: {
@@ -260,4 +259,3 @@ test('question about a historical image gets a text reference and the read-image
   });
 });
 
-export {};

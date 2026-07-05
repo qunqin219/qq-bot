@@ -1,5 +1,8 @@
-import fs = require('fs');
-import path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const WORKSPACE_DIR = path.resolve(__dirname, '..', '..');
 const DEFAULT_ENV_FILE = path.join(WORKSPACE_DIR, '.env');
@@ -22,7 +25,7 @@ function parseEnvValue(rawValue: unknown): string {
   return value.replace(/\s+#.*$/, '').trim();
 }
 
-function loadEnvFile(filePath: string = process.env.QQ_BOT_ENV_FILE || DEFAULT_ENV_FILE): boolean {
+export function loadEnvFile(filePath: string = process.env.QQ_BOT_ENV_FILE || DEFAULT_ENV_FILE): boolean {
   if (!filePath || !fs.existsSync(filePath)) return false;
   const text = fs.readFileSync(filePath, 'utf-8');
   for (const line of text.split(/\r?\n/)) {
@@ -36,5 +39,3 @@ function loadEnvFile(filePath: string = process.env.QQ_BOT_ENV_FILE || DEFAULT_E
 }
 
 loadEnvFile();
-
-module.exports = { loadEnvFile };

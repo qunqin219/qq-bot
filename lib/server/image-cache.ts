@@ -2,17 +2,17 @@
 
 import type { LookupAddress } from 'dns';
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const dns = require('dns').promises;
-const net = require('net');
-const { IMAGE_CACHE_DIR } = require('./paths');
-const { readJsonFile, writeJsonFileAtomic } = require('./json-store');
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import net from 'net';
+import { promises as dns } from 'dns';
+import { IMAGE_CACHE_DIR } from './paths.js';
+import { readJsonFile, writeJsonFileAtomic } from './json-store.js';
 
-const CACHE_DIR = IMAGE_CACHE_DIR;
+export const CACHE_DIR = IMAGE_CACHE_DIR;
 const INDEX_FILE = path.join(CACHE_DIR, 'index.json');
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGES_PER_MESSAGE = 5;
 const FETCH_TIMEOUT_MS = Math.max(1000, Math.min(30000, Number(process.env.QQ_BOT_IMAGE_FETCH_TIMEOUT_MS || 8000)));
 const MAX_REDIRECTS = 3;
@@ -78,7 +78,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function decodeHtmlEntities(text: unknown): string {
+export function decodeHtmlEntities(text: unknown): string {
   return String(text || '')
     .replace(/&amp;/g, '&')
     .replace(/&#44;/g, ',')
@@ -106,7 +106,7 @@ function ensureCacheDir(): void {
 }
 
 function loadIndex(): ImageCacheIndex {
-  return readJsonFile(INDEX_FILE, {}, (data: unknown) => data && typeof data === 'object' && !Array.isArray(data));
+  return readJsonFile(INDEX_FILE, {}, (data): data is ImageCacheIndex => Boolean(data) && typeof data === 'object' && !Array.isArray(data));
 }
 
 function saveIndex(index: ImageCacheIndex): void {
@@ -119,7 +119,7 @@ function isStickerRecord(record: ImageRecord): boolean {
   return record.sub_type === '1' || summary === '[动画表情]' || summary.includes('动画表情');
 }
 
-function extractImageRecords(message: unknown, options: ExtractImageOptions = {}): ImageRecord[] {
+export function extractImageRecords(message: unknown, options: ExtractImageOptions = {}): ImageRecord[] {
   const records: ImageRecord[] = [];
   const raw = String(message || '');
   const re = /\[CQ:image,([^\]]+)\]/g;
@@ -150,7 +150,7 @@ function hashText(text: unknown): string {
   return crypto.createHash('sha256').update(String(text || '')).digest('hex');
 }
 
-function cacheKeyForRecord(record: ImageRecord | null | undefined): string {
+export function cacheKeyForRecord(record: ImageRecord | null | undefined): string {
   // QQ 的 file 通常是同一图片的稳定标识；URL 里的 rkey 会过期，不适合单独当长期键。
   if (record?.file) return hashText(`file:${record.file}`);
   return hashText(`url:${record?.url || record?.raw || ''}`);
@@ -171,7 +171,7 @@ function extFromRecord(record: ImageRecord | null | undefined): string {
   return '';
 }
 
-function getCachedImage(recordOrKey: ImageRecord | string): ImageCacheEntry | null {
+export function getCachedImage(recordOrKey: ImageRecord | string): ImageCacheEntry | null {
   const key = typeof recordOrKey === 'string' ? recordOrKey : cacheKeyForRecord(recordOrKey);
   const entry = loadIndex()[key];
   if (!entry?.file_path || !fs.existsSync(entry.file_path)) return null;
@@ -204,7 +204,7 @@ function normalizeHostname(hostname: unknown): string {
   return String(hostname || '').toLowerCase().replace(/\.$/, '');
 }
 
-function hostMatchesAllowedSuffix(hostname: string): boolean {
+export function hostMatchesAllowedSuffix(hostname: string): boolean {
   const host = normalizeHostname(hostname);
   return allowedHostSuffixes().some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
@@ -249,7 +249,7 @@ async function resolveHostname(hostname: string): Promise<string[]> {
   return records.map((record) => record.address);
 }
 
-async function validateImageUrl(rawUrl: unknown): Promise<ValidationResult> {
+export async function validateImageUrl(rawUrl: unknown): Promise<ValidationResult> {
   let parsed;
   try {
     parsed = new URL(String(rawUrl || ''));
@@ -310,7 +310,7 @@ async function fetchImageResponse(rawUrl: string, headers: HeadersInit = {}): Pr
   return { ok: false, error: '图片跳转次数过多' };
 }
 
-async function downloadImage(url: string): Promise<DownloadImageResult> {
+export async function downloadImage(url: string): Promise<DownloadImageResult> {
   const fetched = await fetchImageResponse(url, {
     'User-Agent': 'Mozilla/5.0 QQBot/1.0',
     Referer: 'https://im.qq.com/',
@@ -338,7 +338,7 @@ async function downloadImage(url: string): Promise<DownloadImageResult> {
   return { ok: true, buffer, mimeType };
 }
 
-async function cacheImageRecord(record: ImageRecord, meta: ImageCacheMeta = {}): Promise<ImageCacheEntry | null> {
+export async function cacheImageRecord(record: ImageRecord, meta: ImageCacheMeta = {}): Promise<ImageCacheEntry | null> {
   if (!record?.url) return null;
   const key = cacheKeyForRecord(record);
   const cached = getCachedImage(key);
@@ -380,7 +380,7 @@ async function cacheImageRecord(record: ImageRecord, meta: ImageCacheMeta = {}):
   }
 }
 
-async function cacheImagesFromMessage(
+export async function cacheImagesFromMessage(
   message: unknown,
   meta: ImageCacheMeta = {},
   options: ExtractImageOptions = {}
@@ -395,17 +395,3 @@ async function cacheImagesFromMessage(
   }
   return results.filter((entry): entry is ImageCacheEntry => Boolean(entry));
 }
-
-module.exports = {
-  CACHE_DIR,
-  MAX_IMAGE_BYTES,
-  decodeHtmlEntities,
-  extractImageRecords,
-  cacheKeyForRecord,
-  getCachedImage,
-  validateImageUrl,
-  hostMatchesAllowedSuffix,
-  downloadImage,
-  cacheImageRecord,
-  cacheImagesFromMessage,
-};

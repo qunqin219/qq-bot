@@ -1,8 +1,8 @@
-import fs = require('fs');
-import path = require('path');
-import util = require('util');
+import fs from 'fs';
+import path from 'path';
+import util from 'util';
 
-const { SERVER_LOG_FILE } = require('./paths') as { SERVER_LOG_FILE: string };
+import { SERVER_LOG_FILE } from './paths.js';
 
 type ConsoleMethod = 'log' | 'info' | 'warn' | 'error';
 
@@ -19,7 +19,7 @@ function padMilliseconds(value: number): string {
   return String(value).padStart(3, '0');
 }
 
-function beijingTimestamp(date = new Date()): string {
+export function beijingTimestamp(date = new Date()): string {
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric',
@@ -34,7 +34,7 @@ function beijingTimestamp(date = new Date()): string {
   return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}.${padMilliseconds(date.getMilliseconds())} CST`;
 }
 
-function formatConsoleLine(level: string, args: unknown[], date = new Date()): string {
+export function formatConsoleLine(level: string, args: unknown[], date = new Date()): string {
   const prefix = `[${beijingTimestamp(date)}] [${level}] `;
   const text = util.format(...args);
   return text
@@ -76,11 +76,11 @@ const MAX_ROTATED_FILES = 5;
 const ROTATE_CHECK_INTERVAL_MS = 10_000;
 let lastRotateCheckAt = 0;
 
-function rotateLogFileIfNeeded(logFile: string, now = Date.now()): void {
+export function rotateLogFileIfNeeded(logFile: string, now = Date.now()): void {
   if (now - lastRotateCheckAt < ROTATE_CHECK_INTERVAL_MS) return;
   lastRotateCheckAt = now;
 
-  let size = 0;
+  let size: number;
   try {
     size = fs.statSync(logFile).size;
   } catch {
@@ -102,7 +102,7 @@ function rotateLogFileIfNeeded(logFile: string, now = Date.now()): void {
   }
 }
 
-function installServerLogger(logFile = SERVER_LOG_FILE): LoggerState {
+export function installServerLogger(logFile = SERVER_LOG_FILE): LoggerState {
   const current = getLoggerState();
   if (current?.installed) return current;
 
@@ -151,7 +151,7 @@ function installServerLogger(logFile = SERVER_LOG_FILE): LoggerState {
   return state;
 }
 
-function flushServerLogger(callback?: () => void): void {
+export function flushServerLogger(callback?: () => void): void {
   const current = getLoggerState();
   if (!current?.installed) {
     callback?.();
@@ -163,13 +163,3 @@ function flushServerLogger(callback?: () => void): void {
   }
   current.stream.end(callback);
 }
-
-module.exports = {
-  beijingTimestamp,
-  formatConsoleLine,
-  installServerLogger,
-  flushServerLogger,
-  rotateLogFileIfNeeded,
-};
-
-export {};

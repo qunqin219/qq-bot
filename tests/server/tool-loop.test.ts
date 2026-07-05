@@ -1,10 +1,9 @@
-declare const require: any;
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import * as ai from '../../lib/server/ai.js';
+
 declare const global: any;
-
-const test = require('node:test');
-const assert = require('node:assert/strict');
-
-const ai = require('../../lib/server/ai');
 
 type GeminiPart = {
   text?: string;
@@ -71,6 +70,36 @@ function makeCfg(): TestConfig {
     ai_filter_stickers: true,
   };
 }
+
+test('buildRequestBody uses thinkingLevel for Gemini 3 models', async () => {
+  const body = await ai.buildRequestBody('hello', [], {
+    ...makeCfg(),
+    ai_model: 'gemini-3.5-flash',
+    ai_thinking_enabled: true,
+    ai_thinking_level: 'high',
+  });
+
+  assert.deepEqual(body.generationConfig?.thinkingConfig, {
+    includeThoughts: true,
+    thinkingLevel: 'high',
+  });
+  assert.equal('thinkingBudget' in (body.generationConfig?.thinkingConfig || {}), false);
+});
+
+test('buildRequestBody uses thinkingBudget for Gemini 2.5 models', async () => {
+  const body = await ai.buildRequestBody('hello', [], {
+    ...makeCfg(),
+    ai_model: 'gemini-2.5-flash',
+    ai_thinking_enabled: true,
+    ai_thinking_level: 'high',
+  });
+
+  assert.deepEqual(body.generationConfig?.thinkingConfig, {
+    includeThoughts: true,
+    thinkingBudget: 8192,
+  });
+  assert.equal('thinkingLevel' in (body.generationConfig?.thinkingConfig || {}), false);
+});
 
 test('chat supports multi-round function calling', async () => {
   const oldFetch = global.fetch;
@@ -224,9 +253,9 @@ test('buildRequestBody preserves stored Gemini thought signatures in history', a
     },
   ], makeCfg());
 
-  assert.equal(body.contents[0].parts[0].thoughtSignature, 'user-sig');
-  assert.equal(body.contents[1].parts[0].thoughtSignature, 'model-sig');
-  assert.equal(body.contents[2].parts[0].text, '继续');
+  assert.equal((body.contents[0].parts[0] as any).thoughtSignature, 'user-sig');
+  assert.equal((body.contents[1].parts[0] as any).thoughtSignature, 'model-sig');
+  assert.equal((body.contents[2].parts[0] as any).text, '继续');
 });
 
 test('chat ignores thought summary text and stores only safe native response parts', async () => {
@@ -260,6 +289,41 @@ test('chat ignores thought summary text and stores only safe native response par
     assert.equal(captured[0].modelContent.parts[0].thoughtSignature, 'visible-sig');
   } finally {
     global.fetch = oldFetch;
+  }
+});
+
+test('chat logs Gemini thought summary parts', async () => {
+  const oldFetch = global.fetch;
+  const oldLog = console.log;
+  const logs: string[] = [];
+  global.fetch = (async () => {
+    return jsonResponse({
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts: [
+              { text: '内部摘要', thought: true },
+              { text: '最终回答' },
+            ],
+          },
+        },
+      ],
+    });
+  }) as any;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((item) => String(item)).join(' '));
+  };
+
+  try {
+    const reply = await ai.chat('hello', [], makeCfg());
+
+    assert.equal(reply, '最终回答');
+    assert.match(logs.join('\n'), /思考过程 round=1/);
+    assert.match(logs.join('\n'), /内部摘要/);
+  } finally {
+    global.fetch = oldFetch;
+    console.log = oldLog;
   }
 });
 
@@ -322,5 +386,3 @@ test('chat stays silent after retryable Gemini HTTP errors are exhausted', async
     global.fetch = oldFetch;
   }
 });
-
-export {};

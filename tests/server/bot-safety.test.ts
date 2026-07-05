@@ -1,24 +1,22 @@
-declare const require: any;
-declare const process: any;
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+import * as ai from '../../lib/server/ai.js';
+import * as botCore from '../../lib/server/bot-core.js';
+import { DEFAULT_CONFIG, saveConfig } from '../../lib/server/config.js';
+import { getMessages } from '../../lib/server/message-store.js';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-bot-safety-test-'));
 process.env.QQ_BOT_CONFIG_FILE = path.join(tempRoot, 'config.json');
+process.env.QQ_BOT_STORE_BACKEND = 'json';
 process.env.QQ_BOT_MESSAGES_FILE = path.join(tempRoot, 'messages.json');
 process.env.QQ_BOT_CONVERSATIONS_FILE = path.join(tempRoot, 'conversations.json');
 process.env.QQ_BOT_MEMORIES_FILE = path.join(tempRoot, 'memories.json');
 process.env.QQ_BOT_IMAGE_CACHE_DIR = path.join(tempRoot, 'images');
 process.env.QQ_BOT_SESSIONS_FILE = path.join(tempRoot, 'sessions.json');
-
-const ai = require('../../lib/server/ai');
-const botCore = require('../../lib/server/bot-core');
-const { DEFAULT_CONFIG, saveConfig } = require('../../lib/server/config');
-const { getMessages } = require('../../lib/server/message-store');
 
 type TestEvent = Record<string, any> & {
   group_id?: number | null;
@@ -75,7 +73,6 @@ test('mutating group management tools require explicit confirmation', async () =
     ai_memory_enabled: false,
   });
 
-  const oldChat = ai.chat;
   let toolResult: ToolResult = {};
   let banCalls = 0;
   const sent: string[] = [];
@@ -94,19 +91,19 @@ test('mutating group management tools require explicit confirmation', async () =
     },
   };
 
-  ai.chat = async (_input: string, _history: any[], _cfg: Record<string, any>, options: Record<string, any>) => {
+  const oldChat = ai._overrideChat((async (_input: string, _history: any[], _cfg: Record<string, any>, options: Record<string, any>) => {
     toolResult = await options.executeFunctionCall('qq_mute_member', {
       target_user_id: 222,
       duration_seconds: 600,
     });
     return toolResult.message;
-  };
+  }) as any);
 
   try {
     await botCore.handleEvent(messageEvent({
       user_id: 111,
       raw_message: '[CQ:at,qq=999] 禁言 [CQ:at,qq=222]',
-    }), client);
+    }), client as any);
     assert.equal(banCalls, 0);
     const firstToolResult = toolResult as Record<string, any>;
     assert.equal(firstToolResult.ok, false);
@@ -116,13 +113,12 @@ test('mutating group management tools require explicit confirmation', async () =
     await botCore.handleEvent(messageEvent({
       user_id: 111,
       raw_message: '[CQ:at,qq=999] 确认禁言 [CQ:at,qq=222]',
-    }), client);
+    }), client as any);
     assert.equal(banCalls, 1);
     const secondToolResult = toolResult as Record<string, any>;
     assert.equal(secondToolResult.ok, true);
   } finally {
-    ai.chat = oldChat;
+    ai._restoreChat(oldChat);
   }
 });
 
-export {};
