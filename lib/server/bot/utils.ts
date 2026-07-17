@@ -94,6 +94,8 @@ function isBotMentionedRaw(raw: unknown, selfId: number | string | null | undefi
 
 function isOnlyBotMentionMessage(raw: unknown, selfId: number | string | null | undefined): boolean {
   if (!isBotMentionedRaw(raw, selfId)) return false;
+  // 引用一条消息再 @Bot 是有明确语义的“请处理这条引用”，不能当成空唤醒。
+  if (extractReplyMessageId(raw)) return false;
   const text = ai.stripCqCodes(raw).trim();
   const hasMedia = /\[CQ:(image|record|video|file),/.test(String(raw || ''));
   const atIds = extractAtUserIds(raw);

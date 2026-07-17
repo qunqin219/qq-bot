@@ -131,32 +131,48 @@ test('runtime preview attaches current group image with the text context', async
   });
 });
 
-test('group runtime uses role history for the bot own previous replies', async () => {
-  conversationStore.appendTurn('group:424242424', '你怎么看', '00', 10, {
+test('group runtime merges bot replies and ambient messages into one chronological event timeline', async () => {
+  conversationStore.clearHistory('group:424242424');
+  conversationStore.appendTurn('group:424242424', '肯德基活动是真的吗', '这是部分门店活动', 10, {
     user_gemini_content: {
       role: 'user',
-      parts: [{ text: '你怎么看' }],
+      parts: [{ text: '肯德基活动是真的吗' }],
     },
     model_gemini_content: {
       role: 'model',
-      parts: [{ text: '00', thoughtSignature: 'model-sig' }],
+      parts: [{ text: '这是部分门店活动', thoughtSignature: 'model-sig' }],
     },
   });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  addMessage({
+    post_type: 'message',
+    message_type: 'group',
+    group_id: 424242424,
+    user_id: 2089931398,
+    message_id: 9051,
+    raw_message: 'OpenCode 压缩后为什么缓存没有命中',
+    message: 'OpenCode 压缩后为什么缓存没有命中',
+    sender: { nickname: 'Jiang' },
+  } as any);
 
   const preview = await botCore.buildAiRuntimePreview({
-    event: makeGroupEvent('[CQ:at,qq=1525899506] 继续你刚刚说的'),
+    event: makeGroupEvent('[CQ:at,qq=1525899506] 你觉得呢'),
     client: makeClient(),
     cfg: makeConfig({ ai_context_enabled: true }),
   });
 
   assert.equal(preview.conversationKey, 'group:424242424');
-  assert.equal(preview.history.length, 2, 'group chats should keep recent AI turns as Gemini role history');
-  assert.equal(preview.requestBody.contents.length, 3);
-  assert.equal(preview.requestBody.contents[0].role, 'user');
-  assert.equal(preview.requestBody.contents[0].parts[0].text, '你怎么看');
-  assert.equal(preview.requestBody.contents[1].role, 'model');
-  assert.equal(preview.requestBody.contents[1].parts[0].text, '00');
-  assert.equal(preview.requestBody.contents[1].parts[0].thoughtSignature, 'model-sig');
+  assert.equal(preview.conversationHistory.length, 2, 'stored turns remain available to build the timeline');
+  assert.equal(preview.history.length, 0, 'group chats must not impersonate a private user/assistant dialogue');
+  assert.equal(preview.requestBody.contents.length, 1);
+  assert.match(preview.aiInput, /RECENT_GROUP_EVENTS_JSONL/);
+  assert.match(preview.aiInput, /"record_type":"bot_reply"/);
+  assert.match(preview.aiInput, /这是部分门店活动/);
+  assert.match(preview.aiInput, /OpenCode 压缩后为什么缓存没有命中/);
+  assert.ok(
+    preview.aiInput.indexOf('这是部分门店活动') < preview.aiInput.indexOf('OpenCode 压缩后为什么缓存没有命中'),
+    'the newer ambient topic should appear after the older bot reply in the canonical timeline'
+  );
   assert.match(preview.requestBody.contents.at(-1).parts[0].text, /CURRENT_MESSAGE_JSON/);
 
   const declarations = (preview.requestBody.tools || []).flatMap((tool: Record<string, any>) => tool.functionDeclarations || []);
@@ -165,6 +181,83 @@ test('group runtime uses role history for the bot own previous replies', async (
   assert.equal(names.includes('qq_search_chat_history'), false);
   assert.doesNotMatch(preview.aiInput, /qq_get_ai_conversation_history/);
   assert.doesNotMatch(preview.aiInput, /qq_search_chat_history/);
+});
+
+test('group runtime keeps the focus event out of recent history across string and numeric message ids', async () => {
+  addMessage({
+    post_type: 'message',
+    message_type: 'group',
+    group_id: 737373737,
+    user_id: 3605900361,
+    message_id: '10001',
+    raw_message: '[CQ:at,qq=1525899506] 只出现一次的当前问题',
+    message: '[CQ:at,qq=1525899506] 只出现一次的当前问题',
+    sender: { nickname: 'qunqin' },
+  } as any);
+
+  const preview = await botCore.buildAiRuntimePreview({
+    event: {
+      ...makeGroupEvent('[CQ:at,qq=1525899506] 只出现一次的当前问题'),
+      group_id: 737373737,
+      message_id: 10001,
+    },
+    client: makeClient(),
+    cfg: makeConfig(),
+  });
+
+  assert.equal(preview.aiInput.match(/只出现一次的当前问题/g)?.length, 1);
+});
+
+test('reply-only group invocation resolves a bounded nested quote chain as the effective request', async () => {
+  const client = makeClient();
+  const getMsgCalls: Array<number | string> = [];
+  client.getMsg = async (messageId: number | string) => {
+    getMsgCalls.push(messageId);
+    if (Number(messageId) === 459748799) {
+      return {
+        status: 'ok',
+        data: {
+          message_id: 459748799,
+          user_id: 1239522858,
+          raw_message: '[CQ:reply,id=487869576][CQ:at,qq=3032966392] 他们这个套餐额度多少来着',
+          sender: { nickname: 'Luyx' },
+        },
+      };
+    }
+    if (Number(messageId) === 487869576) {
+      return {
+        status: 'ok',
+        data: {
+          message_id: 487869576,
+          user_id: 3032966392,
+          raw_message: '火山就是月之暗面训练模型的算力提供方之一',
+          sender: { nickname: 'Look Sleep' },
+        },
+      };
+    }
+    return { status: 'failed', data: null };
+  };
+
+  const preview = await botCore.buildAiRuntimePreview({
+    event: {
+      ...makeGroupEvent('[CQ:reply,id=459748799][CQ:at,qq=1525899506][CQ:at,qq=1922930035]'),
+      group_id: 626262626,
+      message_id: 10002,
+    },
+    client,
+    cfg: makeConfig({ ai_context_enabled: true }),
+  });
+
+  assert.equal(preview.history.length, 0);
+  assert.match(preview.aiInput, /QUOTED_MESSAGE_CHAIN_JSONL/);
+  assert.match(preview.aiInput, /"quote_depth":1/);
+  assert.match(preview.aiInput, /他们这个套餐额度多少来着/);
+  assert.match(preview.aiInput, /"quote_depth":2/);
+  assert.match(preview.aiInput, /火山就是月之暗面训练模型的算力提供方之一/);
+  assert.match(preview.aiInput, /"reply_to_message_id":"459748799"/);
+  assert.match(preview.aiInput, /"interaction_intent":"answer_quoted_message"/);
+  assert.doesNotMatch(preview.aiInput, /PENDING_UNANSWERED_BOT_MENTION_JSON/);
+  assert.deepEqual(getMsgCalls.map(Number), [459748799, 487869576], 'text and image context share one quote-graph snapshot');
 });
 
 test('unrelated recent image is not auto-attached when the question is not about it', async () => {
@@ -213,7 +306,7 @@ test('unrelated recent image is not auto-attached when the question is not about
       cfg: makeConfig(),
     });
 
-    assert.match(preview.aiInput, /QUOTED_MESSAGE_JSON/);
+    assert.match(preview.aiInput, /QUOTED_MESSAGE_CHAIN_JSONL/);
     assert.match(preview.aiInput, /BV1smKX6kED6/);
     // 引用的消息本身没有图片，当前问题也没提到"图/截图"，
     // momo 那张跟话题无关的历史图片不应该被自动附带给模型看，避免带偏回答。
@@ -258,4 +351,3 @@ test('question about a historical image gets a text reference and the read-image
     assert.ok(declarations.some((item: Record<string, any>) => item.name === 'qq_read_image'));
   });
 });
-

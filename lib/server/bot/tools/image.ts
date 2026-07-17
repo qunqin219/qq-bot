@@ -11,8 +11,9 @@ import {
   promptJson,
   formatTime,
   messageTime,
-  extractReplyMessageId,
 } from '../utils.js';
+import { resolveQuotedMessageChain } from '../context/quote-chain.js';
+import type { ResolvedQuotedMessage } from '../context/quote-chain.js';
 
 function buildImageRefs(raw: unknown): Array<Record<string, any>> {
   return imageCache.extractImageRecords(raw, {
@@ -151,31 +152,29 @@ async function executeReadImageTool(
   };
 }
 
-// 自动附带的图片只包含：当前消息自己的图片、当前消息明确引用/回复的那条消息的图片。
-// 其余历史群聊图片一律不主动塞给模型看——只在 RECENT_GROUP_MESSAGES_JSONL 里留一个 image_key 文字引用，
+// 自动附带的图片只包含：当前消息自己的图片、当前消息明确引用链里的图片。
+// 其余历史群聊图片一律不主动塞给模型看——只在 RECENT_GROUP_EVENTS_JSONL 里留一个 image_key 文字引用，
 // 模型如果判断确实需要看某张历史图片，会自己调用 qq_read_image 工具按需读取（见 buildGroupManagementFunctionDeclarations）。
 // 这样可以避免模型被"恰好在附近但没人问"的图片带偏，同时又不会让它彻底看不到旧图。
 async function buildGroupContextInlineParts(
   event: OneBotEvent,
   client: OneBotClient,
-  cfg: BotConfig
+  cfg: BotConfig,
+  quotedMessageChain: ResolvedQuotedMessage[] | null = null
 ): Promise<Array<Record<string, any>>> {
   if (!event.group_id || !cfg.ai_group_context_enabled) return [];
 
-  const messages: Array<Record<string, any>> = [event];
-
-  const replyId = extractReplyMessageId(event.raw_message || '');
-  if (replyId && cfg.ai_group_context_include_quote && client?.getMsg) {
-    const quoted = await client.getMsg(replyId);
-    if (quoted?.status === 'ok' && quoted.data) {
-      messages.push({
-        message_id: quoted.data.message_id ?? replyId,
-        raw_message: quoted.data.raw_message || String(quoted.data.message || ''),
-        user_id: quoted.data.user_id ?? null,
-        sender: quoted.data.sender || {},
-        message_type: 'group',
-      });
-    }
+  const messages: Array<Record<string, any>> = [{ ...event, quote_depth: 0 }];
+  if (cfg.ai_group_context_include_quote) {
+    const quotedMessages = quotedMessageChain || await resolveQuotedMessageChain(event.raw_message || '', client, 3);
+    messages.push(...quotedMessages.map((quoted) => ({
+      message_id: quoted.message_id,
+      raw_message: quoted.raw_message,
+      user_id: quoted.user_id,
+      sender: quoted.sender,
+      message_type: 'group',
+      quote_depth: quoted.quote_depth,
+    })));
   }
 
   const parts: Array<Record<string, any>> = [];
@@ -208,6 +207,7 @@ async function buildGroupContextInlineParts(
           'CONTEXT_IMAGE:',
           promptJson({
             message_id: message.message_id ?? null,
+            quote_depth: message.quote_depth ?? 0,
             time: formatTime(messageTime(message)),
             speaker_qq: message.user_id ?? null,
             speaker_name: senderNameForMessage(message),

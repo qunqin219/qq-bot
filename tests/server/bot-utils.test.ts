@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractReplyMessageId, extractAtUserIds, annotateAtMentions, isBotMentionedRaw, idsEqual, compactJson, previewText, summarizeToolResult, summarizeOneBotResult } from '../../lib/server/bot/utils.js';
+import { extractReplyMessageId, extractAtUserIds, annotateAtMentions, isBotMentionedRaw, isOnlyBotMentionMessage, idsEqual, compactJson, previewText, summarizeToolResult, summarizeOneBotResult } from '../../lib/server/bot/utils.js';
 
 test('extractReplyMessageId: 提取 reply id', () => {
   assert.equal(extractReplyMessageId('[CQ:reply,id=12345]hello'), '12345');
@@ -44,6 +44,10 @@ test('isBotMentionedRaw: 普通文本 -> false', () => {
 
 test('isBotMentionedRaw: selfId 为空 -> false', () => {
   assert.equal(isBotMentionedRaw('[CQ:at,qq=100]', null), false);
+});
+
+test('isOnlyBotMentionMessage: 引用消息再 @Bot 不是空唤醒', () => {
+  assert.equal(isOnlyBotMentionMessage('[CQ:reply,id=123][CQ:at,qq=100]', 100), false);
 });
 
 test('idsEqual: 数字与字符串相等', () => {
@@ -98,4 +102,3 @@ test('summarizeOneBotResult: 正常状态透传', () => {
 test('summarizeOneBotResult: null 返回未知状态', () => {
   assert.deepEqual(summarizeOneBotResult(null), { status: 'unknown' });
 });
-
