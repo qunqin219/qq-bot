@@ -45,6 +45,7 @@ export interface ConfigResponse {
   ai_api_key?: string;
   ai_api_key_configured?: boolean;
   ai_api_key_last4?: string;
+  ai_api_key_source?: 'config' | 'environment' | '';
   ai_model: string;
   ai_system_prompt: string;
   ai_context_enabled: boolean;
@@ -53,6 +54,9 @@ export interface ConfigResponse {
   ai_thinking_level: string;
   ai_google_search_enabled: boolean;
   ai_url_context_enabled: boolean;
+  ai_web_search_enabled: boolean;
+  ai_web_search_context_size: string;
+  ai_web_fetch_enabled: boolean;
   ai_allow_group_mention_from_non_admin: boolean;
   ai_group_context_enabled: boolean;
   ai_group_context_messages: number;
@@ -62,6 +66,16 @@ export interface ConfigResponse {
   ai_group_reply_quote_enabled: boolean;
   ai_group_reply_quote_prefer_quoted: boolean;
   ai_memory_enabled: boolean;
+  agent_context_token_budget: number;
+  agent_output_token_reserve: number;
+  agent_recent_turns: number;
+  agent_session_max_turns: number;
+  agent_max_tool_calls: number;
+  agent_run_timeout_ms: number;
+  agent_tool_timeout_ms: number;
+  agent_tool_result_max_chars: number;
+  agent_approval_ttl_ms: number;
+  agent_tool_permissions: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -128,6 +142,67 @@ export interface LogsResponse {
   lines: string[];
   total?: number;
   [key: string]: unknown;
+}
+
+// ── QQ 沙盒 ──
+export type SandboxMode = 'private' | 'group';
+
+export interface SandboxMember {
+  user_id: number;
+  nickname: string;
+  card: string;
+  role: 'owner' | 'admin' | 'member';
+  muted_until: string | null;
+  kicked: boolean;
+}
+
+export interface SandboxMessage {
+  id: string;
+  message_id: number;
+  mode: SandboxMode;
+  group_id: number | null;
+  user_id: number;
+  sender_name: string;
+  sender_role: string;
+  text: string;
+  reply_to: number | null;
+  from_bot: boolean;
+  created_at: string;
+  run_id?: string;
+  agent?: string;
+}
+
+export interface SandboxStateResponse {
+  isolated: true;
+  napcat_connected: false;
+  ai_configured: boolean;
+  provider: string;
+  model: string;
+  bot: { user_id: number; nickname: string; role: 'admin' };
+  private_peer: SandboxMember;
+  group: {
+    group_id: number;
+    group_name: string;
+    whole_ban: boolean;
+    members: SandboxMember[];
+  };
+  messages: Record<SandboxMode, SandboxMessage[]>;
+}
+
+export interface SandboxSendInput {
+  mode: SandboxMode;
+  text: string;
+  sender_id?: number;
+  reply_to?: number | null;
+  trigger_ai?: boolean;
+}
+
+export interface SandboxSendResponse {
+  ok: true;
+  state: SandboxStateResponse;
+  incoming: SandboxMessage;
+  reply: SandboxMessage | null;
+  run_id: string | null;
 }
 
 // ── 通用 API 响应 ──

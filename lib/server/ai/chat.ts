@@ -3,7 +3,7 @@
 import type { LLMProvider } from './provider.js';
 import type { AiConfig, ChatOptions, ToolResult } from './types.js';
 
-import { GeminiProvider } from './gemini/provider.js';
+import { providerRegistry } from './registry.js';
 import {
   errorMessage,
   oneLinePreview,
@@ -25,9 +25,22 @@ import {
   THOUGHT_LEAK_REPAIR_PROMPT,
 } from './types.js';
 
-function getProvider(_cfg: AiConfig): LLMProvider {
-  // 目前只有 Gemini；未来可根据 cfg.ai_provider 返回不同实现
-  return GeminiProvider;
+function getProvider(cfg: AiConfig): LLMProvider {
+  return providerRegistry.require(String(cfg.ai_provider || 'gemini'));
+}
+
+function isConfigured(cfg: AiConfig): boolean {
+  if (!cfg || cfg.ai_enabled !== true) return false;
+  return getProvider(cfg).isConfigured(cfg);
+}
+
+async function buildRequestBody(
+  userMessage: unknown,
+  history: unknown,
+  cfg: AiConfig,
+  options: ChatOptions = {}
+): Promise<any> {
+  return getProvider(cfg).buildRequestBody(userMessage, history, cfg, options);
 }
 
 /**
@@ -45,11 +58,12 @@ async function chat(
   cfg: AiConfig,
   options: ChatOptions = {}
 ): Promise<string | null> {
-  if (!cfg || cfg.ai_enabled !== true || !String(cfg.ai_api_key || '').trim()) {
+  if (!cfg || cfg.ai_enabled !== true) {
     return null;
   }
 
   const provider = getProvider(cfg);
+  if (!provider.isConfigured(cfg)) return null;
   const { model, baseUrl } = provider.describeRequest(cfg);
 
   const maxToolRounds = resolveNumber(options.maxToolRounds, DEFAULT_MAX_TOOL_ROUNDS, 1, 8);
@@ -77,21 +91,23 @@ async function chat(
   const requestStartedAt = Date.now();
 
   console.log(
-    `[AI] ${provider.name} 请求开始 model=${model} base_url=${baseUrl} contents=${body.contents.length} ` +
+    `[AI] ${provider.name} 请求开始 model=${model} base_url=${baseUrl} items=${provider.getInputItemCount(body)} ` +
     `image_parts=${provider.countInlineImageParts(body)} tools=${compactJson(provider.summarizeEnabledTools(body))} ` +
     `max_rounds=${maxToolRounds} max_tool_calls=${maxToolCalls}`
   );
 
   try {
     for (let round = 1; round <= maxToolRounds + 1; round += 1) {
+      if (options.signal?.aborted) throw options.signal.reason || new Error('agent run cancelled');
       let resp: Response | null = null;
       for (let attempt = 0; attempt <= maxHttpRetries; attempt += 1) {
+        if (options.signal?.aborted) throw options.signal.reason || new Error('agent run cancelled');
         const roundStartedAt = Date.now();
         console.log(
           `[AI] ${provider.name} 第${round}轮请求开始 attempt=${attempt + 1}/${maxHttpRetries + 1} ` +
-          `contents=${body.contents.length} executed_tool_calls=${executedToolCalls}`
+          `items=${provider.getInputItemCount(body)} executed_tool_calls=${executedToolCalls}`
         );
-        resp = await provider.sendRequest(body, cfg);
+        resp = await provider.sendRequest(body, cfg, options.signal);
         console.log(
           `[AI] ${provider.name} 第${round}轮响应 status=${resp.status} duration_ms=${Date.now() - roundStartedAt} ` +
           `attempt=${attempt + 1}/${maxHttpRetries + 1}`
@@ -103,7 +119,7 @@ async function chat(
         const canRetry = retryable && attempt < maxHttpRetries;
         if (!canRetry) {
           console.error(
-            `[AI] ${provider.name} generateContent 第${round}轮返回错误 ${resp.status} ` +
+            `[AI] ${provider.name} request 第${round}轮返回错误 ${resp.status} ` +
             `attempt=${attempt + 1}/${maxHttpRetries + 1}: ${oneLinePreview(errText, 500)}`
           );
           if (retryable) {
@@ -152,12 +168,7 @@ async function chat(
         if (sanitizedReply.blocked) {
           if (thoughtLeakRepairCount < 1 && round <= maxToolRounds) {
             thoughtLeakRepairCount += 1;
-            provider.appendContents(body, [
-              {
-                role: 'user',
-                parts: [{ text: THOUGHT_LEAK_REPAIR_PROMPT }],
-              },
-            ]);
+            provider.appendUserMessage(body, THOUGHT_LEAK_REPAIR_PROMPT);
             console.warn(`[AI] ${provider.name} 内部思考泄漏已拦截，重试生成最终回复 round=${round}`);
             continue;
           }
@@ -201,13 +212,26 @@ async function chat(
         console.warn(
           `[ToolAudit] 本轮工具调用超过限制 round=${round} requested=${functionCalls.length} running=${callsToRun.length}`
         );
+        for (const call of functionCalls.slice(callsToRun.length)) {
+          roundToolResults.push({
+            callId: call.callId,
+            name: call.name,
+            response: {
+              ok: false,
+              skipped: true,
+              message: '本轮工具调用超过宿主限制，未执行此调用。请根据已有结果继续回答。',
+            },
+          });
+        }
       }
 
       for (const [index, call] of callsToRun.entries()) {
+        if (options.signal?.aborted) throw options.signal.reason || new Error('agent run cancelled');
         const key = toolCallKey(call);
         if (seenToolCalls.has(key)) {
           console.warn(`[ToolAudit] duplicate_skipped round=${round} name=${call.name} args=${compactJson(call.args || {})}`);
           roundToolResults.push({
+            callId: call.callId,
             name: call.name,
             response: {
               ok: false,
@@ -225,7 +249,7 @@ async function chat(
           index: index + 1,
           executedToolCalls,
         });
-        const item = { name: call.name, response };
+        const item = { callId: call.callId, name: call.name, response };
         roundToolResults.push(item);
         allToolResults.push(item);
       }
@@ -235,19 +259,10 @@ async function chat(
         return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
       }
 
-      const modelContent = provider.getModelContent(data);
-      if (!modelContent) {
-        console.warn('[AI] 模型请求工具但缺少候选内容，停止工具循环');
+      if (!provider.appendToolResults(body, data, roundToolResults)) {
+        console.warn('[AI] 模型请求工具但缺少可继续的响应条目，停止工具循环');
         return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
       }
-
-      provider.appendContents(body, [
-        modelContent,
-        {
-          role: 'user',
-          parts: provider.buildFunctionResponseParts(roundToolResults),
-        },
-      ]);
     }
 
     console.warn(
@@ -256,9 +271,10 @@ async function chat(
     );
     return fallbackToolMessages(allToolResults);
   } catch (e: unknown) {
+    if (options.signal?.aborted) throw e;
     console.error(`[AI] 调用 ${provider.name} 异常:`, errorMessage(e));
     return fallbackToolMessages(allToolResults);
   }
 }
 
-export { chat, getProvider };
+export { buildRequestBody, chat, getProvider, isConfigured };

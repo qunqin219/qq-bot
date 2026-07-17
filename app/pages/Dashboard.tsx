@@ -1,28 +1,48 @@
-// 仪表盘页 —— QQ Bot 状态概览
+// 仪表盘 —— 状态优先的双栏运维总览
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../../lib/api/client'
 import type { StatusResponse, GroupInfo, BotLoginInfo } from '../../lib/shared/types'
-import { Card, Loading, ErrorBox, PageHeader } from '../../components/UI'
+import {
+  Loading,
+  ErrorBox,
+  PageHeader,
+  StatusDot,
+  DataPanel,
+  PanelHeader,
+  MetricCell,
+  EmptyState,
+} from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import {
-  MessageCircleIcon,
-  MessagesSquareIcon,
   RefreshCwIcon,
-  ShieldIcon,
   UsersIcon,
   SendIcon,
   SettingsIcon,
   ScrollTextIcon,
+  ShieldIcon,
+  MessagesSquareIcon,
+  PinIcon,
+  BrainIcon,
 } from '../../components/Icons'
-import { Link } from 'react-router-dom'
 
 interface DashboardData {
   status: StatusResponse & { group_count?: number }
   messageCount: number
   chatCount: number
 }
+
+const commands = [
+  { to: '/send', label: '发消息', desc: '推送到群/私聊', icon: SendIcon },
+  { to: '/logs', label: '日志', desc: '排查 AI / 工具', icon: ScrollTextIcon },
+  { to: '/settings', label: '设置', desc: '运行时参数', icon: SettingsIcon },
+  { to: '/admins', label: '管理员', desc: '访问控制', icon: ShieldIcon },
+  { to: '/conversations', label: '上下文', desc: '会话历史', icon: BrainIcon },
+  { to: '/memories', label: '记忆', desc: '长期记忆', icon: PinIcon },
+]
 
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
@@ -62,24 +82,11 @@ export default function Dashboard() {
   const login: BotLoginInfo = status.login || {}
   const groups: GroupInfo[] = status.groups || []
 
-  const stats = [
-    { label: 'QQ', value: login.user_id ?? '—', icon: ShieldIcon },
-    { label: '昵称', value: login.nickname ?? '—', icon: MessageCircleIcon },
-    { label: '群数', value: status.group_count ?? 0, icon: UsersIcon },
-    { label: '消息', value: messageCount, sub: `${chatCount} 会话`, icon: MessagesSquareIcon },
-  ]
-
-  const quickLinks = [
-    { to: '/send', label: '发消息', icon: SendIcon },
-    { to: '/settings', label: '设置', icon: SettingsIcon },
-    { to: '/logs', label: '日志', icon: ScrollTextIcon },
-  ]
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <PageHeader
         title="仪表盘"
-        subtitle="QQ Bot 运行状态与快捷入口"
+        subtitle="链路状态 · 吞吐指标 · 快捷运维"
         action={
           <Button variant="outline" size="sm" onClick={fetchData}>
             <RefreshCwIcon className="h-4 w-4" /> 刷新
@@ -87,113 +94,142 @@ export default function Dashboard() {
         }
       />
 
-      {/* 状态横幅 */}
-      <div className={cn(
-        'overflow-hidden rounded-lg border bg-card',
-        connected ? 'border-l-4 border-l-emerald-500' : 'border-l-4 border-l-destructive'
-      )}>
-        <div className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* 顶部：连接状态条 */}
+      <DataPanel className="overflow-hidden">
+        <div
+          className={cn(
+            'flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between',
+            connected ? 'bg-teal-950 text-teal-50' : 'bg-red-950 text-red-50'
+          )}
+        >
           <div className="flex min-w-0 items-center gap-3">
-            <div className={cn(
-              'flex h-10 w-10 shrink-0 items-center justify-center rounded-full',
-              connected ? 'bg-emerald-100 text-emerald-700' : 'bg-destructive/10 text-destructive'
-            )}>
-              <MessageCircleIcon className="h-5 w-5" />
-            </div>
+            <StatusDot ok={connected} label={connected ? 'NapCat Online' : 'NapCat Offline'} />
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-foreground">{login.nickname || 'QQ Bot'}</span>
-                <Badge variant={connected ? 'default' : 'destructive'}>
-                  {connected ? '在线' : '离线'}
-                </Badge>
+              <div className="truncate text-sm font-semibold">
+                {login.nickname || 'QQ Bot'}
+                {login.user_id ? (
+                  <span className="ml-2 font-mono text-xs font-normal opacity-70">
+                    {login.user_id}
+                  </span>
+                ) : null}
               </div>
-              <p className="text-sm text-muted-foreground">
+              <p className="truncate font-mono text-[11px] opacity-70">
                 {connected
-                  ? `QQ: ${login.user_id ?? '—'} · 已同步 ${status.group_count ?? 0} 个群`
-                  : '未连接 NapCat，状态数据将在连接后自动显示'}
+                  ? `synced groups ${status.group_count ?? 0} · chats ${chatCount}`
+                  : '等待 WebSocket 连接恢复'}
               </p>
             </div>
           </div>
+          <Badge
+            variant="outline"
+            className={cn(
+              'w-fit border-current/30 font-mono',
+              connected ? 'text-teal-100' : 'text-red-100'
+            )}
+          >
+            {connected ? 'READY' : 'DOWN'}
+          </Badge>
+        </div>
 
-          <div className="flex gap-2">
-            {quickLinks.map((link) => {
-              const Icon = link.icon
+        <div className="grid grid-cols-2 divide-x divide-border lg:grid-cols-4">
+          <MetricCell label="QQ" value={login.user_id ?? '—'} />
+          <MetricCell label="昵称" value={login.nickname ?? '—'} />
+          <MetricCell label="群数" value={status.group_count ?? 0} hint="已同步" />
+          <MetricCell
+            label="消息缓存"
+            value={messageCount}
+            hint={`${chatCount} 会话`}
+          />
+        </div>
+      </DataPanel>
+
+      {/* 双栏：群表 + 命令面板 */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(260px,0.8fr)]">
+        <DataPanel>
+          <PanelHeader
+            title="Groups"
+            meta={`${Math.min(groups.length, 8)} / ${status.group_count ?? 0}`}
+            action={
+              <Button variant="outline" size="xs" asChild>
+                <Link to="/groups">管理白名单</Link>
+              </Button>
+            }
+          />
+          {groups.length === 0 ? (
+            <EmptyState
+              icon={UsersIcon}
+              title={connected ? '暂无群数据' : '等待 Bot 连接'}
+              description={
+                connected
+                  ? '当前账号没有可展示的群。'
+                  : 'NapCat 连接成功后会同步群列表。'
+              }
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="font-mono">群名</TableHead>
+                    <TableHead className="font-mono">Group ID</TableHead>
+                    <TableHead className="font-mono text-right">成员</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {groups.slice(0, 8).map((g) => (
+                    <TableRow key={g.group_id}>
+                      <TableCell className="max-w-[220px] truncate font-medium">
+                        {g.group_name || '未命名群'}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {g.group_id}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
+                        {g.member_count ?? '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </DataPanel>
+
+        <DataPanel>
+          <PanelHeader title="Commands" description="常用运维入口" />
+          <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-1">
+            {commands.map((cmd) => {
+              const Icon = cmd.icon
               return (
-                <Button key={link.to} variant="outline" size="sm" asChild>
-                  <Link to={link.to} className="gap-1.5">
-                    <Icon className="h-4 w-4" /> {link.label}
-                  </Link>
-                </Button>
+                <Link
+                  key={cmd.to}
+                  to={cmd.to}
+                  className="flex items-center gap-3 bg-card px-3 py-3 transition hover:bg-teal-50/60"
+                >
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground">
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-foreground">{cmd.label}</div>
+                    <div className="truncate font-mono text-[10px] text-muted-foreground">
+                      {cmd.desc}
+                    </div>
+                  </div>
+                </Link>
               )
             })}
           </div>
-        </div>
-      </div>
-
-      {/* 统计卡片 */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {stats.map((s) => {
-          const Icon = s.icon
-          return (
-            <Card key={s.label} className="p-4">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{s.label}</div>
-                  <div className="mt-1.5 text-xl font-semibold tabular-nums text-foreground">{String(s.value)}</div>
-                  {s.sub && <div className="mt-0.5 text-xs text-muted-foreground">{s.sub}</div>}
-                </div>
-                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
-                  <Icon className="h-4 w-4" />
-                </div>
-              </div>
-            </Card>
-          )
-        })}
-      </div>
-
-      {/* 群列表 */}
-      <Card className="overflow-hidden">
-        <div className="flex items-center justify-between border-b border-border px-5 py-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">群列表</h2>
-          <span className="text-xs text-muted-foreground">前 {Math.min(groups.length, 5)} / {status.group_count ?? 0} 个</span>
-        </div>
-
-        {groups.length === 0 ? (
-          <div className="px-5 py-8 text-center">
-            <div className={cn(
-              'mx-auto flex h-10 w-10 items-center justify-center rounded-full',
-              connected ? 'bg-secondary text-muted-foreground' : 'bg-destructive/10 text-destructive'
-            )}>
-              <UsersIcon className="h-5 w-5" />
-            </div>
-            <div className="mt-3 text-sm font-medium text-foreground">
-              {connected ? '暂无群数据' : '等待 Bot 连接'}
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {connected
-                ? '当前账号没有可展示的群，刷新后会重新同步。'
-                : 'NapCat 连接成功后，这里会显示最新群列表。'}
-            </p>
+          <div className="border-t border-border px-3 py-2">
+            <Link
+              to="/messages"
+              className="inline-flex items-center gap-1.5 font-mono text-[11px] text-primary hover:underline"
+            >
+              <MessagesSquareIcon className="h-3.5 w-3.5" />
+              查看消息缓存 →
+            </Link>
           </div>
-        ) : (
-          <ul className="divide-y divide-border">
-            {groups.slice(0, 5).map((g) => (
-              <li
-                key={g.group_id}
-                className="flex items-center justify-between gap-4 px-5 py-3 transition hover:bg-muted/30"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
-                    <UsersIcon className="h-4 w-4" />
-                  </div>
-                  <span className="truncate text-sm font-medium text-foreground">{g.group_name || '未命名群'}</span>
-                </div>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">{g.group_id}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+        </DataPanel>
+      </div>
     </div>
   )
 }

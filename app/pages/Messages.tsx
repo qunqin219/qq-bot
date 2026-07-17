@@ -1,11 +1,18 @@
-// 最近消息页 —— 查看缓存的 OneBot 消息
-import { useEffect, useState } from 'react'
+// 最近消息 —— 左会话列表 + 右消息流
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api/client'
-import { Card, EmptyState, Loading, ErrorBox, PageHeader } from '../../components/UI'
+import {
+  Loading,
+  ErrorBox,
+  PageHeader,
+  DataPanel,
+  Toolbar,
+  EmptyState,
+  PanelHeader,
+} from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Select } from '@/components/ui/select'
 import { RefreshCwIcon, UserIcon, UsersIcon, MessagesSquareIcon } from '../../components/Icons'
 import { cn } from '@/lib/utils'
 import type { ChatSummary } from '../../lib/shared/types'
@@ -32,9 +39,8 @@ export default function Messages() {
     setLoading(true)
     setError(null)
     try {
-      const params = { limit: 100 }
       const [msgs, chatList] = await Promise.all([
-        api.getMessages(params),
+        api.getMessages({ limit: 100 }),
         api.getChats(),
       ])
       setChats(chatList.chats || [])
@@ -58,6 +64,12 @@ export default function Messages() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterType])
 
+  const filteredChats = useMemo(() => {
+    if (filterType === 'group') return chats.filter((c) => c.type === 'group')
+    if (filterType === 'private') return chats.filter((c) => c.type === 'private')
+    return chats
+  }, [chats, filterType])
+
   const visible =
     filterChat === 'all'
       ? messages
@@ -73,16 +85,16 @@ export default function Messages() {
     <div>
       <PageHeader
         title="最近消息"
-        subtitle={`共 ${visible.length} 条消息`}
+        subtitle="OneBot 消息缓存监视器"
         action={
-          <Button onClick={fetchData} disabled={loading}>
+          <Button size="sm" onClick={fetchData} disabled={loading}>
             <RefreshCwIcon className="h-4 w-4" /> 刷新
           </Button>
         }
       />
 
-      <Card className="mb-5 p-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <DataPanel>
+        <Toolbar>
           <Tabs
             value={filterType}
             onValueChange={(value) => {
@@ -92,83 +104,109 @@ export default function Messages() {
           >
             <TabsList>
               <TabsTrigger value="all">全部</TabsTrigger>
-              <TabsTrigger value="group">群消息</TabsTrigger>
+              <TabsTrigger value="group">群</TabsTrigger>
               <TabsTrigger value="private">私聊</TabsTrigger>
             </TabsList>
           </Tabs>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {visible.length} / {messages.length} msgs · {filteredChats.length} chats
+          </span>
+        </Toolbar>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <Select
-              value={filterChat}
-              onValueChange={setFilterChat}
-              placeholder="全部会话"
-              options={[
-                { value: 'all', label: '全部会话' },
-                ...chats.map((c) => ({
-                  value: String(c.id),
-                  label: `${c.type === 'group' ? '群' : '私聊'} ${c.name} (${c.id})`,
-                })),
-              ]}
-              className="w-full sm:w-[260px]"
-            />
-            <span className="hidden text-xs text-muted-foreground sm:inline">
-              {visible.length} / {messages.length} 条
-            </span>
-          </div>
-        </div>
-      </Card>
-
-      {visible.length === 0 ? (
-        <EmptyState
-          icon={MessagesSquareIcon}
-          title="暂无消息记录"
-          description="收到群聊或私聊消息后，这里会显示最近缓存内容。"
-        />
-      ) : (
-        <div className="space-y-3">
-          {visible.map((m, i) => {
-            const isGroup = !!m.group_id
-            return (
-              <Card key={`${m.message_id ?? i}-${i}`} className="p-3">
-                <div className="flex gap-3">
-                  <div
+        <div className="grid min-h-[420px] lg:grid-cols-[240px_minmax(0,1fr)]">
+          {/* 左：会话列表 */}
+          <div className="border-b border-border lg:border-b-0 lg:border-r">
+            <PanelHeader title="Chats" meta={String(filteredChats.length)} />
+            <div className="max-h-[280px] overflow-y-auto lg:max-h-[520px]">
+              <button
+                type="button"
+                onClick={() => setFilterChat('all')}
+                className={cn(
+                  'flex w-full items-center justify-between border-b border-border px-3 py-2.5 text-left text-sm transition hover:bg-muted/40',
+                  filterChat === 'all' && 'bg-teal-50 text-teal-900'
+                )}
+              >
+                <span className="font-medium">全部会话</span>
+                <span className="font-mono text-[10px] text-muted-foreground">{messages.length}</span>
+              </button>
+              {filteredChats.length === 0 ? (
+                <div className="px-3 py-8 text-center text-xs text-muted-foreground">暂无会话</div>
+              ) : (
+                filteredChats.map((c) => (
+                  <button
+                    key={`${c.type}-${c.id}`}
+                    type="button"
+                    onClick={() => setFilterChat(String(c.id))}
                     className={cn(
-                      'flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold',
-                      isGroup
-                        ? 'bg-emerald-500 text-emerald-50'
-                        : 'bg-primary text-primary-foreground'
+                      'flex w-full items-start gap-2 border-b border-border px-3 py-2.5 text-left transition hover:bg-muted/40',
+                      String(filterChat) === String(c.id) && 'bg-teal-50'
                     )}
                   >
-                    {isGroup ? <UsersIcon className="h-5 w-5" /> : <UserIcon className="h-5 w-5" />}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate text-sm font-semibold text-foreground">
+                    <div
+                      className={cn(
+                        'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded',
+                        c.type === 'group' ? 'bg-teal-600 text-teal-50' : 'bg-sidebar text-sidebar-foreground'
+                      )}
+                    >
+                      {c.type === 'group' ? (
+                        <UsersIcon className="h-3.5 w-3.5" />
+                      ) : (
+                        <UserIcon className="h-3.5 w-3.5" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{c.name || c.id}</div>
+                      <div className="font-mono text-[10px] text-muted-foreground">
+                        {c.type} · {c.id}
+                      </div>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* 右：消息流 */}
+          <div className="flex min-w-0 flex-col">
+            <PanelHeader title="Stream" meta={`${visible.length} lines`} />
+            {visible.length === 0 ? (
+              <EmptyState
+                icon={MessagesSquareIcon}
+                title="暂无消息记录"
+                description="收到群聊或私聊后，这里会显示缓存内容。"
+              />
+            ) : (
+              <div className="max-h-[520px] divide-y divide-border overflow-y-auto">
+                {visible.map((m, i) => {
+                  const isGroup = !!m.group_id
+                  return (
+                    <div key={`${m.message_id ?? i}-${i}`} className="px-3 py-3 hover:bg-muted/30">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-foreground">
                           {m.nickname || m.user_id}
                         </span>
                         <Badge variant={isGroup ? 'default' : 'secondary'}>
                           {isGroup ? '群' : '私聊'}
                         </Badge>
+                        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                          {m.time ? new Date(m.time).toLocaleString('zh-CN') : ''}
+                        </span>
                       </div>
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {m.time ? new Date(m.time).toLocaleString('zh-CN') : ''}
-                      </span>
+                      <p className="mt-1.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
+                        {m.raw_message || '(空消息)'}
+                      </p>
+                      <div className="mt-1.5 font-mono text-[10px] text-muted-foreground">
+                        id {m.message_id} · user {m.user_id}
+                        {isGroup && ` · group ${m.group_id}`}
+                      </div>
                     </div>
-                    <div className="mt-1 break-words text-sm text-foreground">
-                      {m.raw_message || '(空消息)'}
-                    </div>
-                    <div className="mt-2 font-mono text-xs text-muted-foreground">
-                      ID {m.message_id} · user {m.user_id}
-                      {isGroup && ` · group ${m.group_id}`}
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            )
-          })}
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      </DataPanel>
     </div>
   )
 }

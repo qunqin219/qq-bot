@@ -1,14 +1,22 @@
-// 发送消息页 —— 向群或私聊发送文本消息
+// 发送消息 —— 左目标选择 + 右撰写面板
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from '../../lib/api/client'
-import { Card, EmptyState, PageHeader, useToast } from '../../components/UI'
+import {
+  PageHeader,
+  DataPanel,
+  Toolbar,
+  PanelHeader,
+  EmptyState,
+  MonoLabel,
+  useToast,
+} from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Select } from '@/components/ui/select'
 import { MessageCircleIcon, RefreshCwIcon, SendIcon, UserIcon, UsersIcon } from '../../components/Icons'
+import { cn } from '@/lib/utils'
 import type { GroupInfo, ChatSummary } from '../../lib/shared/types'
 
 export default function SendMsg() {
@@ -35,7 +43,12 @@ export default function SendMsg() {
   }, [])
 
   const privateChats = chats.filter((c) => c.type === 'private')
-  const candidates = type === 'group' ? groups : privateChats
+  const targets = type === 'group' ? groups : privateChats
+
+  const pick = (t: string, id: number | string) => {
+    setType(t)
+    setTargetId(String(id))
+  }
 
   const handleSend = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -65,154 +78,125 @@ export default function SendMsg() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div>
       <PageHeader
         title="发送消息"
-        subtitle="向群聊或私聊发送文本消息"
+        subtitle="运维推送通道 · 群 / 私聊"
         action={
-          <Button variant="outline" onClick={fetchData}>
+          <Button variant="outline" size="sm" onClick={fetchData}>
             <RefreshCwIcon className="h-4 w-4" /> 刷新目标
           </Button>
         }
       />
       {ToastEl}
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_260px]">
-        <Card className="p-5">
-          <form onSubmit={handleSend} className="space-y-5">
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                发送类型
-              </label>
-              <Tabs
-                value={type}
-                onValueChange={(v) => { setType(v); setTargetId('') }}
-                className="mt-2"
-              >
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="group">群消息</TabsTrigger>
-                  <TabsTrigger value="private">私聊消息</TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </div>
+      <DataPanel>
+        <Toolbar>
+          <Tabs
+            value={type}
+            onValueChange={(v) => {
+              setType(v)
+              setTargetId('')
+            }}
+          >
+            <TabsList>
+              <TabsTrigger value="group">
+                <UsersIcon className="mr-1.5 h-3.5 w-3.5" /> 群
+              </TabsTrigger>
+              <TabsTrigger value="private">
+                <UserIcon className="mr-1.5 h-3.5 w-3.5" /> 私聊
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {targets.length} targets
+          </span>
+        </Toolbar>
 
-            {candidates.length > 0 && (
-              <div>
-                <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  快速选择
-                </label>
-                <Select
-                  value=""
-                  onValueChange={(v) => v && setTargetId(v)}
-                  placeholder={type === 'group' ? '— 选择群 —' : '— 选择用户 —'}
-                  options={[
-                    { value: '', label: type === 'group' ? '— 选择群 —' : '— 选择用户 —' },
-                    ...candidates.map((c) => {
-                      if (type === 'group') {
-                        const g = c as GroupInfo
-                        return { value: String(g.group_id), label: `${g.group_name} (${g.group_id})` }
-                      }
-                      const p = c as ChatSummary
-                      return { value: String(p.id), label: `${p.name} (${p.id})` }
-                    }),
-                  ]}
-                  className="mt-2 w-full"
-                />
-              </div>
-            )}
-
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                {type === 'group' ? '群号 (group_id)' : '用户 QQ (user_id)'}
-              </label>
+        <form onSubmit={handleSend} className="grid min-h-[420px] lg:grid-cols-[260px_minmax(0,1fr)]">
+          <div className="border-b border-border lg:border-b-0 lg:border-r">
+            <PanelHeader title="Targets" />
+            <div className="border-b border-border p-3">
+              <MonoLabel>Manual ID</MonoLabel>
               <Input
                 type="number"
                 value={targetId}
                 onChange={(e) => setTargetId(e.target.value)}
-                placeholder={type === 'group' ? '例如：123456789' : '例如：1525899506'}
-                className="mt-2 h-9 font-mono"
+                placeholder={type === 'group' ? 'group_id' : 'user_id'}
+                className="mt-1.5 h-9 font-mono"
               />
             </div>
-
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                消息内容
-              </label>
-              <Textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                rows={6}
-                placeholder="输入要发送的消息..."
-                className="mt-2"
-              />
-            </div>
-
-            <Button type="submit" disabled={sending} className="w-full">
-              {sending ? '发送中...' : <><SendIcon className="h-4 w-4" /> 发送消息</>}
-            </Button>
-          </form>
-        </Card>
-
-        <Card className="p-0">
-          <div className="border-b border-border px-4 py-3">
-            <div className="text-sm font-semibold text-foreground">可选目标</div>
-            <div className="text-xs text-muted-foreground">
-              {groups.length} 群 · {privateChats.length} 私聊
+            <div className="max-h-[320px] overflow-y-auto lg:max-h-[400px]">
+              {targets.length === 0 ? (
+                <EmptyState
+                  icon={MessageCircleIcon}
+                  title="暂无目标"
+                  description="可手动输入 ID；连接后会同步列表。"
+                  className="min-h-[120px] py-8"
+                />
+              ) : (
+                targets.map((c, i) => {
+                  if (type === 'group') {
+                    const g = c as GroupInfo
+                    const active = String(g.group_id) === targetId
+                    return (
+                      <button
+                        key={`g-${g.group_id ?? i}`}
+                        type="button"
+                        onClick={() => pick('group', g.group_id)}
+                        className={cn(
+                          'flex w-full flex-col border-b border-border px-3 py-2.5 text-left hover:bg-muted/40',
+                          active && 'bg-teal-50'
+                        )}
+                      >
+                        <span className="truncate text-sm font-medium">{g.group_name || '未命名'}</span>
+                        <span className="font-mono text-[10px] text-muted-foreground">{g.group_id}</span>
+                      </button>
+                    )
+                  }
+                  const p = c as ChatSummary
+                  const active = String(p.id) === targetId
+                  return (
+                    <button
+                      key={`p-${p.id ?? i}`}
+                      type="button"
+                      onClick={() => pick('private', p.id)}
+                      className={cn(
+                        'flex w-full flex-col border-b border-border px-3 py-2.5 text-left hover:bg-muted/40',
+                        active && 'bg-teal-50'
+                      )}
+                    >
+                      <span className="truncate text-sm font-medium">{p.name || p.id}</span>
+                      <span className="font-mono text-[10px] text-muted-foreground">{p.id}</span>
+                    </button>
+                  )
+                })
+              )}
             </div>
           </div>
 
-          {groups.length === 0 && privateChats.length === 0 ? (
-            <EmptyState
-              icon={MessageCircleIcon}
-              title="暂无可选目标"
-              description="可以先手动输入群号或用户 QQ。"
+          <div className="flex min-w-0 flex-col">
+            <PanelHeader
+              title="Compose"
+              meta={targetId ? `${type} → ${targetId}` : 'no target'}
             />
-          ) : (
-            <div className="max-h-[600px] overflow-y-auto p-3">
-              <div className="space-y-2">
-                {groups.slice(0, 6).map((group, index) => (
-                  <button
-                    key={`group-${group.group_id ?? index}`}
-                    type="button"
-                    onClick={() => {
-                      setType('group')
-                      setTargetId(String(group.group_id))
-                    }}
-                    className="flex w-full items-center gap-2 rounded-md border border-border bg-card p-2 text-left transition hover:bg-secondary"
-                  >
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-100 text-emerald-700">
-                      <UsersIcon className="h-3.5 w-3.5" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs font-semibold text-foreground">{group.group_name || '未命名群'}</span>
-                      <span className="block truncate font-mono text-[10px] text-muted-foreground">{group.group_id}</span>
-                    </span>
-                  </button>
-                ))}
-                {privateChats.slice(0, 6).map((chat, index) => (
-                  <button
-                    key={`private-${chat.id ?? index}`}
-                    type="button"
-                    onClick={() => {
-                      setType('private')
-                      setTargetId(String(chat.id))
-                    }}
-                    className="flex w-full items-center gap-2 rounded-md border border-border bg-card p-2 text-left transition hover:bg-secondary"
-                  >
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground">
-                      <UserIcon className="h-3.5 w-3.5" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs font-semibold text-foreground">{chat.name || chat.id}</span>
-                      <span className="block truncate font-mono text-[10px] text-muted-foreground">{chat.id}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+            <Textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="输入要发送的消息…"
+              className="min-h-[280px] flex-1 resize-y rounded-none border-0 focus-visible:ring-0"
+            />
+            <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2.5">
+              <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                {message.length} chars
+              </span>
+              <Button type="submit" disabled={sending || !message.trim() || !targetId.trim()}>
+                {sending ? '发送中…' : <><SendIcon className="h-4 w-4" /> 发送</>}
+              </Button>
             </div>
-          )}
-        </Card>
-      </div>
+          </div>
+        </form>
+      </DataPanel>
     </div>
   )
 }

@@ -29,11 +29,13 @@ export const THOUGHT_LEAK_REPAIR_PROMPT = [
 export type AiConfig = Record<string, any>;
 
 export type FunctionCall = {
+  callId?: string;
   name: string;
   args?: Record<string, unknown>;
 };
 
 export type ToolResult = {
+  callId?: string;
   name: string;
   response: any;
 };
@@ -61,6 +63,7 @@ export type ChatOptions = {
   autoAttachImages?: boolean;
   extraParts?: Record<string, unknown>[];
   onFinalTurn?: (_turn: { userContent: any; modelContent: any; reply: string }) => void;
+  signal?: AbortSignal;
 };
 
 // ── Gemini 专属类型 ──

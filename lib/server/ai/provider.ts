@@ -1,12 +1,15 @@
 // LLMProvider 接口 —— 抽象不同 AI 模型提供商的差异
 //
 // chat() 工具循环通过此接口与具体模型交互。
-// 目前只有 GeminiProvider 实现，未来可扩展 OpenAI/Claude 等。
+// Gemini 与 OpenAI Responses API 都通过同一套 Agent 工具循环运行。
 
 import type { AiConfig, ChatOptions, FunctionCall, SanitizedReply, ToolResult } from './types.js';
 
 export interface LLMProvider {
   readonly name: string;
+
+  // 当前 Provider 是否已经具备可用凭据。
+  isConfigured(cfg: AiConfig): boolean;
 
   // 构建请求体
   buildRequestBody(
@@ -17,7 +20,7 @@ export interface LLMProvider {
   ): Promise<any>;
 
   // 发送 HTTP 请求，返回原始 Response
-  sendRequest(body: any, cfg: AiConfig): Promise<Response>;
+  sendRequest(body: any, cfg: AiConfig, signal?: AbortSignal): Promise<Response>;
 
   // 从响应中提取函数调用
   extractFunctionCalls(data: any): FunctionCall[];
@@ -46,6 +49,15 @@ export interface LLMProvider {
 
   // 向请求体追加内容条目
   appendContents(body: any, contents: any[]): void;
+
+  // 追加一次普通用户输入（例如泄漏修复提示）。
+  appendUserMessage(body: any, text: string): void;
+
+  // 追加模型工具调用原始条目和对应的工具结果。
+  appendToolResults(body: any, data: any, results: ToolResult[]): boolean;
+
+  // 返回当前请求体中的会话条目数量，用于模型无关日志。
+  getInputItemCount(body: any): number;
 
   // ── 日志/审计辅助 ──
   countInlineImageParts(body: any): number;

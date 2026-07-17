@@ -80,6 +80,67 @@ function runMigrations(db: Database): void {
       updated_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(conversation_key);
+
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      id TEXT PRIMARY KEY,
+      conversation_key TEXT NOT NULL UNIQUE,
+      agent TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      agent TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      status TEXT NOT NULL,
+      step INTEGER NOT NULL DEFAULT 0,
+      input TEXT NOT NULL DEFAULT '',
+      output TEXT NOT NULL DEFAULT '',
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY(session_id) REFERENCES agent_sessions(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_session ON agent_runs(session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+
+    CREATE TABLE IF NOT EXISTS agent_parts (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      tool_name TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL DEFAULT '',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY(run_id) REFERENCES agent_runs(id),
+      FOREIGN KEY(session_id) REFERENCES agent_sessions(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_parts_run ON agent_parts(run_id, created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS agent_approvals (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      args TEXT NOT NULL DEFAULT '{}',
+      requester_id TEXT NOT NULL DEFAULT '',
+      group_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      FOREIGN KEY(run_id) REFERENCES agent_runs(id),
+      FOREIGN KEY(session_id) REFERENCES agent_sessions(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_approvals_status ON agent_approvals(status, created_at DESC);
   `);
 }
 

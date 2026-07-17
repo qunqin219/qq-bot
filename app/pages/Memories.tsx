@@ -1,12 +1,21 @@
-// 个性化记忆页 —— 查看和管理按会话隔离的 AI 记忆
+// 记忆 —— 左会话导航 + 右列表/编辑器
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from '../../lib/api/client'
-import { Card, EmptyState, Loading, ErrorBox, PageHeader, useToast } from '../../components/UI'
+import {
+  Loading,
+  ErrorBox,
+  PageHeader,
+  DataPanel,
+  Toolbar,
+  PanelHeader,
+  EmptyState,
+  MonoLabel,
+  useToast,
+} from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Select } from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -26,6 +35,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { PinIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from '../../components/Icons'
+import { cn } from '@/lib/utils'
 
 interface MemoryItem {
   id: number
@@ -39,7 +49,7 @@ interface MemoryItem {
 const ALL_MEMORY_KEYS = '__all_memory_keys__'
 
 function formatTime(value: string | undefined) {
-  if (!value) return '-'
+  if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString('zh-CN', { hour12: false })
@@ -48,7 +58,7 @@ function formatTime(value: string | undefined) {
 function getKeyLabel(key: string | undefined) {
   if (key?.startsWith('private:')) return `私聊 ${key.replace('private:', '')}`
   if (key?.startsWith('group:')) return `群聊 ${key.replace('group:', '')}`
-  return key || '-'
+  return key || '—'
 }
 
 export default function Memories() {
@@ -150,11 +160,6 @@ export default function Memories() {
     }
   }
 
-  const handleClearKey = async () => {
-    if (!activeFilterKey) return
-    setClearOpen(true)
-  }
-
   const confirmClear = async () => {
     if (!activeFilterKey) return
     try {
@@ -172,137 +177,163 @@ export default function Memories() {
   if (error) return <ErrorBox message={error} onRetry={fetchData} />
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div>
       <PageHeader
         title="个性化记忆"
-        subtitle="按私聊和群聊会话 key 隔离保存，模型可通过 create/edit/delete memory 工具主动维护"
+        subtitle="按会话 key 隔离；模型可通过 memory 工具维护"
         action={
-          <Button variant="outline" onClick={fetchData}>
+          <Button variant="outline" size="sm" onClick={fetchData}>
             <RefreshCwIcon className="h-4 w-4" /> 刷新
           </Button>
         }
       />
       {ToastEl}
 
-      <Card className="mb-5 p-4">
-        <form onSubmit={handleCreate}>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-            <div className="min-w-0 flex-1">
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                会话 key
-              </label>
-              <Input
-                value={newKey}
-                onChange={(e) => setNewKey(e.target.value)}
-                placeholder="group:963688355 或 private:3605900361"
-                className="mt-1.5 h-9 font-mono text-sm"
-              />
-            </div>
-            <div className="min-w-0 flex-[2]">
-              <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                记忆内容
-              </label>
-              <Textarea
-                value={newContent}
-                onChange={(e) => setNewContent(e.target.value)}
-                rows={2}
-                placeholder="例如：用户喜欢直接简短的回答，不喜欢客服腔"
-                className="mt-1.5 min-h-[60px]"
-              />
-            </div>
-            <Button type="submit" disabled={saving} className="w-full shrink-0 lg:w-auto">
+      <DataPanel>
+        <Toolbar>
+          <MonoLabel>Composer</MonoLabel>
+          <span className="font-mono text-[11px] text-muted-foreground">{shown.length} memories</span>
+        </Toolbar>
+
+        <form onSubmit={handleCreate} className="grid gap-3 border-b border-border p-3 lg:grid-cols-[220px_minmax(0,1fr)_auto]">
+          <div>
+            <MonoLabel>Session Key</MonoLabel>
+            <Input
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              placeholder="group:… / private:…"
+              className="mt-1.5 h-9 font-mono text-sm"
+            />
+            {keys.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {keys.slice(0, 4).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setNewKey(key)}
+                    className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:bg-secondary"
+                  >
+                    {getKeyLabel(key)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <MonoLabel>Content</MonoLabel>
+            <Textarea
+              value={newContent}
+              onChange={(e) => setNewContent(e.target.value)}
+              rows={2}
+              placeholder="例如：用户喜欢简短直接的回答"
+              className="mt-1.5 min-h-[60px]"
+            />
+          </div>
+          <div className="flex items-end">
+            <Button type="submit" disabled={saving} className="w-full lg:w-auto">
               {saving ? '保存中...' : <><PlusIcon className="h-4 w-4" /> 添加</>}
             </Button>
           </div>
-
-          {keys.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-              {keys.slice(0, 6).map((key) => (
-                <Button
-                  key={key}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setNewKey(key)}
-                >
-                  {getKeyLabel(key)}
-                </Button>
-              ))}
-            </div>
-          )}
         </form>
-      </Card>
 
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="text-sm text-muted-foreground">
-          共 {shown.length} 条记忆
-          {activeFilterKey && ` · ${getKeyLabel(activeFilterKey)}`}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={filterKey}
-            onValueChange={setFilterKey}
-            placeholder="全部会话"
-            options={[
-              { value: ALL_MEMORY_KEYS, label: '全部会话' },
-              ...keys.map((key) => ({ value: key, label: getKeyLabel(key) })),
-            ]}
-            className="w-full sm:w-[220px]"
-          />
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={handleClearKey}
-            disabled={!activeFilterKey}
-          >
-            <Trash2Icon className="h-3.5 w-3.5" /> 清空此会话
-          </Button>
-        </div>
-      </div>
+        <div className="grid min-h-[360px] lg:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="border-b border-border lg:border-b-0 lg:border-r">
+            <PanelHeader
+              title="Keys"
+              action={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-destructive"
+                  disabled={!activeFilterKey}
+                  onClick={() => setClearOpen(true)}
+                >
+                  清空
+                </Button>
+              }
+            />
+            <div className="max-h-[280px] overflow-y-auto lg:max-h-[440px]">
+              <button
+                type="button"
+                onClick={() => setFilterKey(ALL_MEMORY_KEYS)}
+                className={cn(
+                  'flex w-full items-center justify-between border-b border-border px-3 py-2.5 text-left text-sm hover:bg-muted/40',
+                  filterKey === ALL_MEMORY_KEYS && 'bg-teal-50 text-teal-900'
+                )}
+              >
+                <span>全部会话</span>
+                <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
+              </button>
+              {keys.map((key) => {
+                const count = items.filter((m) => m.conversationKey === key).length
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setFilterKey(key)}
+                    className={cn(
+                      'flex w-full items-center justify-between border-b border-border px-3 py-2.5 text-left hover:bg-muted/40',
+                      filterKey === key && 'bg-teal-50'
+                    )}
+                  >
+                    <span className="min-w-0 truncate text-sm font-medium">{getKeyLabel(key)}</span>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
 
-      {shown.length === 0 ? (
-        <EmptyState
-          icon={PinIcon}
-          title="暂无记忆"
-          description={activeFilterKey ? '这个会话暂时没有记忆记录。' : '模型创建记忆或手动添加后会展示在这里。'}
-        />
-      ) : (
-        <div className="space-y-3">
-          {shown.map((memory) => (
-            <Card key={memory.id} className="p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <div className="font-mono text-xs font-medium text-muted-foreground">
-                    #{memory.id} · {getKeyLabel(memory.conversationKey)}
+          <div>
+            <PanelHeader
+              title="Entries"
+              meta={activeFilterKey ? getKeyLabel(activeFilterKey) : 'all'}
+            />
+            {shown.length === 0 ? (
+              <EmptyState
+                icon={PinIcon}
+                title="暂无记忆"
+                description={activeFilterKey ? '这个会话暂时没有记忆。' : '添加或由模型写入后显示于此。'}
+              />
+            ) : (
+              <div className="max-h-[440px] divide-y divide-border overflow-y-auto">
+                {shown.map((memory) => (
+                  <div key={memory.id} className="px-3 py-3 hover:bg-muted/20">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0 font-mono text-[10px] text-muted-foreground">
+                        #{memory.id} · {getKeyLabel(memory.conversationKey)} ·{' '}
+                        {formatTime(memory.updated_at || memory.created_at)}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button variant="outline" size="xs" onClick={() => setEditing(memory)}>
+                          编辑
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="text-destructive hover:bg-destructive/10"
+                          onClick={() => handleDelete(memory)}
+                        >
+                          <Trash2Icon className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                      {memory.content}
+                    </p>
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {formatTime(memory.updated_at || memory.created_at)}
-                  </div>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setEditing(memory)}>
-                    编辑
-                  </Button>
-                  <Button variant="destructive" size="sm" onClick={() => handleDelete(memory)}>
-                    <Trash2Icon className="h-3.5 w-3.5" /> 删除
-                  </Button>
-                </div>
+                ))}
               </div>
-              <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground">
-                {memory.content}
-              </div>
-            </Card>
-          ))}
+            )}
+          </div>
         </div>
-      )}
+      </DataPanel>
 
       <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null) }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>编辑记忆 #{editing?.id}</DialogTitle>
-            <DialogDescription className="font-mono text-xs text-muted-foreground">
-              {editing?.conversationKey}
-            </DialogDescription>
+            <DialogDescription className="font-mono text-xs">{editing?.conversationKey}</DialogDescription>
           </DialogHeader>
           <Textarea
             value={editing?.content || ''}
@@ -310,9 +341,7 @@ export default function Memories() {
             rows={8}
           />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditing(null)}>
-              取消
-            </Button>
+            <Button variant="outline" onClick={() => setEditing(null)}>取消</Button>
             <Button onClick={handleUpdate} disabled={saving}>
               {saving ? '保存中...' : '保存'}
             </Button>
@@ -325,7 +354,7 @@ export default function Memories() {
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除</AlertDialogTitle>
             <AlertDialogDescription>
-              确定删除这条记忆吗？<br />
+              确定删除这条记忆吗？
               <span className="mt-2 block text-xs text-muted-foreground">{deleteTarget?.content}</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -333,9 +362,7 @@ export default function Memories() {
             <AlertDialogCancel onClick={() => { setDeleteOpen(false); setDeleteTarget(null) }}>
               取消
             </AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={confirmDelete}>
-              删除
-            </AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={confirmDelete}>删除</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -350,9 +377,7 @@ export default function Memories() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setClearOpen(false)}>取消</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={confirmClear}>
-              清空
-            </AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={confirmClear}>清空</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

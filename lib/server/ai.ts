@@ -1,4 +1,4 @@
-// Gemini AI 调用模块 —— generateContent 兼容格式，支持文字 + QQ 图片识别
+// AI Provider 兼容入口 —— Gemini generateContent 与 OpenAI Responses 共用 Agent Runtime
 //
 // 实现已拆分到 ai/ 目录下，此文件仅作向后兼容的 re-export 入口：
 //   ai/chat.ts            - 工具循环主逻辑（模型无关，通过 LLMProvider 接口）
@@ -11,10 +11,14 @@
 //   ai/gemini/request.ts  - Gemini 请求体构建
 //   ai/gemini/response.ts - Gemini 响应解析
 //   ai/gemini/image.ts    - Gemini 图片 inline_data 转换
+//   ai/openai/*           - OpenAI Responses API 实现
 
-import { chat as _chat } from './ai/chat.js';
+import {
+  buildRequestBody,
+  chat as _chat,
+  isConfigured,
+} from './ai/chat.js';
 import { stripCqCodes, extractImageUrls, isStickerMessage } from './ai/utils.js';
-import { buildRequestBody } from './ai/gemini/request.js';
 
 // 可变持有者 —— ESM 模式下 export 的命名绑定是只读的，
 // 但对象属性可以修改，测试通过 _overrideChat / _restoreChat 来 mock chat。
@@ -41,4 +45,5 @@ export {
   extractImageUrls,
   isStickerMessage,
   buildRequestBody,
+  isConfigured,
 };

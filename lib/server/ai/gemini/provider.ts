@@ -24,11 +24,15 @@ import {
 const GeminiProvider: LLMProvider = {
   name: 'gemini',
 
+  isConfigured(cfg: AiConfig) {
+    return Boolean(String(cfg.ai_api_key || '').trim());
+  },
+
   async buildRequestBody(userMessage, history, cfg, options) {
     return geminiBuildRequestBody(userMessage, history, cfg, options);
   },
 
-  async sendRequest(body, cfg: AiConfig): Promise<Response> {
+  async sendRequest(body, cfg: AiConfig, signal?: AbortSignal): Promise<Response> {
     const baseUrl = (cfg.ai_base_url || 'https://generativelanguage.googleapis.com/v1beta')
       .replace(/\/+$/, '');
     const model = cfg.ai_model || 'gemini-3.5-flash';
@@ -38,6 +42,7 @@ const GeminiProvider: LLMProvider = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal,
     });
   },
 
@@ -71,6 +76,25 @@ const GeminiProvider: LLMProvider = {
 
   appendContents(body: GeminiRequestBody, contents) {
     body.contents = [...body.contents, ...contents];
+  },
+
+  appendUserMessage(body: GeminiRequestBody, text: string) {
+    body.contents = [...body.contents, { role: 'user', parts: [{ text }] }];
+  },
+
+  appendToolResults(body: GeminiRequestBody, data: GeminiResponse, results: ToolResult[]) {
+    const modelContent = data?.candidates?.[0]?.content;
+    if (!modelContent) return false;
+    body.contents = [
+      ...body.contents,
+      modelContent,
+      { role: 'user', parts: geminiBuildFunctionResponseParts(results) },
+    ];
+    return true;
+  },
+
+  getInputItemCount(body: GeminiRequestBody) {
+    return body.contents.length;
   },
 
   countInlineImageParts(body: GeminiRequestBody) {

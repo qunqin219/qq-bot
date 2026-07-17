@@ -24,7 +24,10 @@ async function buildAiRuntimePreview({ event, client, cfg }: AiRuntimePreviewInp
   const conversationKey = conversationStore.getConversationKey(event);
   const contextTurns = Math.max(1, Number(runtimeCfg.ai_context_turns || 10));
   const history = runtimeCfg.ai_context_enabled
-    ? conversationStore.getHistory(conversationKey, contextTurns * 2)
+    ? conversationStore.getHistory(
+      conversationKey,
+      Math.max(contextTurns * 2, Math.max(1, Number(runtimeCfg.agent_session_max_turns || 200)) * 2)
+    )
     : [];
 
   const botRole = groupId

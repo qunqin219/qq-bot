@@ -87,7 +87,7 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
   if (groupId && !isMentioned) return;
 
   // AI 未启用或未配置 API Key 时直接不回复。
-  if (cfg.ai_enabled !== true || !String(cfg.ai_api_key || '').trim()) return;
+  if (!ai.isConfigured(cfg)) return;
 
   // 只有表情包/动画表情时默认不触发 AI，避免把群聊斗图当成问题处理。
   if (cfg.ai_filter_stickers !== false && ai.isStickerMessage(msg) && !ai.stripCqCodes(msg)) return;

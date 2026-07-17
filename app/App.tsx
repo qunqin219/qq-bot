@@ -14,6 +14,7 @@ import Conversations from './pages/Conversations'
 import Memories from './pages/Memories'
 import Logs from './pages/Logs'
 import Login from './pages/Login'
+import Sandbox from './pages/Sandbox'
 
 // ── 路由守卫：未登录时跳转到 /login ─────────────────────
 function ProtectedRoute({ children, isAuthenticated, loading }: { children: ReactNode; isAuthenticated: boolean; loading: boolean }) {
@@ -21,11 +22,8 @@ function ProtectedRoute({ children, isAuthenticated, loading }: { children: Reac
     return (
       <div className="flex h-screen items-center justify-center bg-background text-muted-foreground">
         <div className="flex items-center gap-3">
-          <svg className="h-6 w-6 animate-spin text-primary" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-          </svg>
-          <span className="text-sm">加载中...</span>
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" />
+          <span className="font-mono text-xs tracking-wide">加载中...</span>
         </div>
       </div>
     )
@@ -61,6 +59,7 @@ export default function App() {
                 <Route path="/logs" element={<Logs />} />
                 <Route path="/send" element={<SendMsg />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/sandbox" element={<Sandbox />} />
               </Routes>
             </MainLayout>
           </ProtectedRoute>

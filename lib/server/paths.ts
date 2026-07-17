@@ -22,6 +22,10 @@ export const MESSAGES_FILE = workspacePath(process.env.QQ_BOT_MESSAGES_FILE, pat
 export const CONVERSATIONS_FILE = workspacePath(process.env.QQ_BOT_CONVERSATIONS_FILE, path.join(WORKSPACE_DIR, 'conversations.json'));
 export const MEMORIES_FILE = workspacePath(process.env.QQ_BOT_MEMORIES_FILE, path.join(WORKSPACE_DIR, 'memories.json'));
 export const SESSIONS_FILE = workspacePath(process.env.QQ_BOT_SESSIONS_FILE, path.join(DATA_DIR, 'sessions.json'));
+export const AGENT_RUNTIME_FILE = workspacePath(
+  process.env.QQ_BOT_AGENT_RUNTIME_FILE,
+  path.join(DATA_DIR, 'agent-runtime.json')
+);
 export const IMAGE_CACHE_DIR = workspacePath(process.env.QQ_BOT_IMAGE_CACHE_DIR, path.join(DATA_DIR, 'images'));
 export const SERVER_LOG_FILE = workspacePath(process.env.QQ_BOT_SERVER_LOG_FILE, path.join(LOG_DIR, 'server.log'));
 
@@ -34,4 +38,14 @@ export function getConversationsFile(): string {
 }
 export function getMemoriesFile(): string {
   return workspacePath(process.env.QQ_BOT_MEMORIES_FILE, path.join(WORKSPACE_DIR, 'memories.json'));
+}
+export function getAgentRuntimeFile(): string {
+  if (process.env.QQ_BOT_AGENT_RUNTIME_FILE) {
+    return workspacePath(process.env.QQ_BOT_AGENT_RUNTIME_FILE, path.join(DATA_DIR, 'agent-runtime.json'));
+  }
+  // JSON 后端测试/迁移通常只重定向 conversations 文件；让 Agent 数据跟随它进入同一临时目录。
+  if (process.env.QQ_BOT_CONVERSATIONS_FILE) {
+    return path.join(path.dirname(workspacePath(process.env.QQ_BOT_CONVERSATIONS_FILE, '')), 'agent-runtime.json');
+  }
+  return path.join(DATA_DIR, 'agent-runtime.json');
 }

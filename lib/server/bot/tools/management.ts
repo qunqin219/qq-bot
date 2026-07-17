@@ -48,7 +48,7 @@ async function executeGroupManagementTool(
   args: ToolArgs,
   context: GroupManagementContext
 ): Promise<Record<string, any> | null> {
-  const { event, client, cfg, botRole, requesterIsAdmin } = context;
+  const { event, client, cfg, botRole, requesterIsAdmin, permissionGranted } = context;
   const groupId = event.group_id;
   const targetUserId = Number(args?.target_user_id || 0);
 
@@ -66,7 +66,7 @@ async function executeGroupManagementTool(
     return executeReadImageTool(args, context);
   }
   if (!requesterIsAdmin) return deny('你没有权限让我读取群成员列表或执行群管理操作');
-  if (isMutatingGroupManagementTool(name) && !hasExplicitManagementConfirmation(event.raw_message || '')) {
+  if (isMutatingGroupManagementTool(name) && !permissionGranted && !hasExplicitManagementConfirmation(event.raw_message || '')) {
     return deny('为了避免误操作，群管理动作需要管理员在当前消息中明确写"确认执行"或"确认禁言/确认解禁/确认踢出/确认全员禁言"。我没有执行这次操作。');
   }
 

@@ -24,7 +24,8 @@
     "preview:ai": "tsx scripts/preview-ai-runtime.ts"
   },
   "dependencies": {
-    "@fontsource-variable/geist": "^5.2.9",
+    "@fontsource-variable/ibm-plex-sans": "^5.2.8",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
     "axios": "^1.7.9",
     "better-sqlite3": "^12.11.1",
     "clsx": "^2.1.1",

@@ -8,11 +8,16 @@ import { OneBotWSClient } from './ws-client.js';
 import { loadConfig } from './config.js';
 import { createServerApp } from './api.js';
 import { SERVER_LOG_FILE } from './paths.js';
+import { agentRunStore } from './agent/store/index.js';
 
 const PORT = Number(process.env.PORT || 8001);
 
 installServerLogger();
 const cfg = loadConfig();
+const interruptedRuns = agentRunStore.recoverInterruptedRuns();
+if (interruptedRuns > 0) {
+  console.warn(`[Agent] 服务启动时恢复了 ${interruptedRuns} 个中断运行`);
+}
 
 function exitAfterFlush(code: number): void {
   flushServerLogger(() => process.exit(code));

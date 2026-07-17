@@ -23,6 +23,11 @@ import cookieParser from 'cookie-parser';
 import { loadConfig, saveConfig } from './config.js';
 import { messageStore, conversationStore, memoryStore } from './store/index.js';
 import { FileSessionStore } from './session-store.js';
+import { agentRunStore } from './agent/store/index.js';
+import { listAgents } from './agent/agents.js';
+import { cancelRun } from './agent/run-controller.js';
+import { resolveApproval } from './agent/runner.js';
+import { qqSandbox, SandboxRequestError } from './sandbox.js';
 import {
   CONFIG_FILE,
   CONVERSATIONS_FILE,
@@ -115,7 +120,9 @@ function secretMetadata(value: unknown): { configured: boolean; last4: string; l
 }
 
 function sanitizeConfigForClient(cfg: ConfigRecord): ConfigRecord {
-  const aiKey = secretMetadata(cfg.ai_api_key);
+  const configuredAiKey = String(cfg.ai_api_key || '').trim();
+  const environmentAiKey = String(cfg.ai_provider === 'openai' ? process.env.OPENAI_API_KEY || '' : '').trim();
+  const aiKey = secretMetadata(configuredAiKey || environmentAiKey);
   const panelPassword = secretMetadata(process.env.QQ_BOT_PANEL_PASSWORD || cfg.panel_password);
   const sessionSecret = secretMetadata(process.env.QQ_BOT_SESSION_SECRET || cfg.session_secret);
   const safe = { ...cfg };
@@ -125,6 +132,7 @@ function sanitizeConfigForClient(cfg: ConfigRecord): ConfigRecord {
   safe.ai_api_key_configured = aiKey.configured;
   safe.ai_api_key_last4 = aiKey.last4;
   safe.ai_api_key_length = aiKey.length;
+  safe.ai_api_key_source = configuredAiKey ? 'config' : (environmentAiKey ? 'environment' : '');
   safe.panel_password_configured = panelPassword.configured;
   safe.session_secret_configured = sessionSecret.configured;
   return safe;
@@ -401,6 +409,7 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
       'group_filter_enabled',
       // AI 回复配置
       'ai_enabled',
+      'ai_provider',
       'ai_base_url',
       'ai_model',
       'ai_system_prompt',
@@ -410,6 +419,9 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
       'ai_thinking_level',
       'ai_google_search_enabled',
       'ai_url_context_enabled',
+      'ai_web_search_enabled',
+      'ai_web_search_context_size',
+      'ai_web_fetch_enabled',
       'ai_allow_group_mention_from_non_admin',
       'ai_group_context_enabled',
       'ai_group_context_messages',
@@ -419,6 +431,17 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
       'ai_group_reply_quote_enabled',
       'ai_group_reply_quote_prefer_quoted',
       'ai_memory_enabled',
+      // Agent Runtime
+      'agent_context_token_budget',
+      'agent_output_token_reserve',
+      'agent_recent_turns',
+      'agent_session_max_turns',
+      'agent_max_tool_calls',
+      'agent_run_timeout_ms',
+      'agent_tool_timeout_ms',
+      'agent_tool_result_max_chars',
+      'agent_approval_ttl_ms',
+      'agent_tool_permissions',
     ];
     for (const key of allowedKeys) {
       if (body[key] !== undefined) {
@@ -590,6 +613,109 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
       size: stat?.size || 0,
       modified_at: stat ? stat.mtime.toISOString() : null,
     });
+  });
+
+  // ── QQ 沙盒（完全内存态，不依赖 NapCat） ────────────
+  app.get('/api/sandbox', requireAuth, (_req, res) => {
+    return res.json(qqSandbox.getState());
+  });
+
+  app.post('/api/sandbox/messages', requireAuth, async (req, res) => {
+    try {
+      const result = await qqSandbox.send(req.body || {});
+      return res.json(result);
+    } catch (error) {
+      if (error instanceof SandboxRequestError) {
+        return res.status(error.status).json({ detail: error.message });
+      }
+      console.error('[Sandbox] 发送消息失败:', error);
+      return res.status(502).json({ detail: errorMessage(error) });
+    }
+  });
+
+  app.post('/api/sandbox/reset', requireAuth, (_req, res) => {
+    return res.json({ ok: true, state: qqSandbox.reset() });
+  });
+
+  // ── Agent Runtime ────────────────────────────────────
+  app.get('/api/agent/agents', requireAuth, (_req, res) => {
+    const agents = listAgents().map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+      mode: agent.mode,
+      tools: agent.tools,
+      permissions: agent.permissions,
+      max_steps: agent.maxSteps,
+    }));
+    return res.json({ agents, total: agents.length });
+  });
+
+  app.get('/api/agent/runs', requireAuth, (req, res) => {
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
+    const sessionId = String(req.query.session_id || '').trim() || undefined;
+    const runs = agentRunStore.listRuns(limit, sessionId);
+    return res.json({ runs, total: runs.length });
+  });
+
+  app.get('/api/agent/runs/:id', requireAuth, (req, res) => {
+    const run = agentRunStore.getRun(String(req.params.id || ''));
+    if (!run) return res.status(404).json({ detail: '未找到 Agent 运行记录' });
+    return res.json({ run, parts: agentRunStore.listParts(run.id) });
+  });
+
+  app.post('/api/agent/runs/:id/cancel', requireAuth, (req, res) => {
+    const runId = String(req.params.id || '');
+    if (!agentRunStore.getRun(runId)) return res.status(404).json({ detail: '未找到 Agent 运行记录' });
+    const cancelled = cancelRun(runId, 'cancelled from admin API');
+    if (!cancelled) return res.status(409).json({ detail: '该运行当前不在执行中' });
+    agentRunStore.updateRun(runId, { status: 'cancelled', error: 'cancelled from admin API' });
+    return res.json({ ok: true, run_id: runId });
+  });
+
+  app.get('/api/agent/approvals', requireAuth, (req, res) => {
+    const rawStatus = String(req.query.status || '').trim();
+    const status = ['pending', 'approved', 'denied', 'expired', 'consumed'].includes(rawStatus)
+      ? rawStatus as 'pending' | 'approved' | 'denied' | 'expired' | 'consumed'
+      : undefined;
+    const approvals = agentRunStore.listApprovals(status);
+    return res.json({ approvals, total: approvals.length });
+  });
+
+  app.post('/api/agent/approvals/:id/:action', requireAuth, async (req, res) => {
+    const approval = agentRunStore.getApproval(String(req.params.id || ''));
+    if (!approval) return res.status(404).json({ detail: '未找到审批请求' });
+    const action = String(req.params.action || '');
+    if (action !== 'approve' && action !== 'deny') return res.status(400).json({ detail: 'action 必须是 approve 或 deny' });
+    if (qqSandbox.isSandboxGroup(approval.group_id)) {
+      const result = await resolveApproval({
+        approvalId: approval.id,
+        approve: action === 'approve',
+        event: qqSandbox.buildApprovalEvent(approval.requester_id),
+        client: qqSandbox.client,
+        cfg: qqSandbox.getAgentConfig(),
+        trusted: true,
+      });
+      return res.status(result.ok ? 200 : 409).json(result);
+    }
+    if (!wsClient) return res.status(503).json({ detail: 'Bot 客户端不可用' });
+    if (action === 'approve' && !wsClient.connected) return res.status(503).json({ detail: 'Bot 未连接 NapCat，暂时不能执行审批工具' });
+    const login = wsClient.connected ? await wsClient.getLoginInfo() : null;
+    const result = await resolveApproval({
+      approvalId: approval.id,
+      approve: action === 'approve',
+      event: {
+        post_type: 'message',
+        message_type: approval.group_id ? 'group' : 'private',
+        group_id: approval.group_id || null,
+        user_id: approval.requester_id,
+        self_id: login?.data?.user_id || null,
+        raw_message: '确认执行',
+      },
+      client: wsClient,
+      cfg: loadConfig(),
+      trusted: true,
+    });
+    return res.status(result.ok ? 200 : 409).json(result);
   });
 
   // ── 前端静态文件 / SPA 路由 ─────────────────────────

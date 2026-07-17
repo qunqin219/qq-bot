@@ -200,7 +200,7 @@ function allowedHostSuffixes(): string[] {
     .filter(Boolean);
 }
 
-function normalizeHostname(hostname: unknown): string {
+export function normalizeHostname(hostname: unknown): string {
   return String(hostname || '').toLowerCase().replace(/\.$/, '');
 }
 
@@ -209,7 +209,7 @@ export function hostMatchesAllowedSuffix(hostname: string): boolean {
   return allowedHostSuffixes().some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
-function isPrivateIp(ip: string): boolean {
+export function isPrivateIp(ip: string): boolean {
   const version = net.isIP(ip);
   if (version === 4) {
     const parts = ip.split('.').map(Number);
@@ -238,7 +238,7 @@ function isPrivateIp(ip: string): boolean {
   return false;
 }
 
-async function resolveHostname(hostname: string): Promise<string[]> {
+export async function resolveHostname(hostname: string): Promise<string[]> {
   const host = normalizeHostname(hostname);
   if (net.isIP(host)) return [host];
   const lookup = dns.lookup(host, { all: true, verbatim: true });

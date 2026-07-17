@@ -1,11 +1,20 @@
-// 管理员管理页 —— 添加/删除管理员 QQ
+// 管理员 —— 工具条 + 密集表格
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from '../../lib/api/client'
-import { Card, EmptyState, Loading, ErrorBox, PageHeader, useToast } from '../../components/UI'
+import {
+  Loading,
+  ErrorBox,
+  PageHeader,
+  DataPanel,
+  Toolbar,
+  EmptyState,
+  useToast,
+} from '../../components/UI'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { PlusIcon, ShieldIcon, Trash2Icon, UsersIcon } from '../../components/Icons'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { PlusIcon, ShieldIcon, Trash2Icon } from '../../components/Icons'
 
 export default function Admins() {
   const [admins, setAdmins] = useState<Array<number | string>>([])
@@ -70,69 +79,80 @@ export default function Admins() {
   return (
     <div>
       <PageHeader
-        title="管理员管理"
-        subtitle="只有管理员 QQ 发送的消息才会被 Bot 回复"
+        title="管理员"
+        subtitle="可触发 Bot 命令与 AI 的 QQ 白名单"
       />
       {ToastEl}
 
-      <Card className="mb-5 p-3">
-        <form onSubmit={handleAdd} className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="min-w-0 flex-1">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              QQ 号
-            </label>
+      <DataPanel>
+        <Toolbar>
+          <form onSubmit={handleAdd} className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+            <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Add QQ
+            </span>
             <Input
               type="number"
               value={newAdmin}
               onChange={(e) => setNewAdmin(e.target.value)}
-              placeholder="例如：1525899506"
-              className="mt-1.5 h-9 font-mono"
+              placeholder="1525899506"
+              className="h-8 max-w-xs font-mono text-sm"
             />
-          </div>
-          <Button
-            type="submit"
-            disabled={saving || !newAdmin.trim()}
-            className="w-full shrink-0 sm:w-auto"
-          >
-            {saving ? '保存中...' : <><PlusIcon className="h-4 w-4" /> 添加管理员</>}
-          </Button>
-        </form>
-      </Card>
+            <Button type="submit" size="sm" disabled={saving || !newAdmin.trim()}>
+              {saving ? '保存中...' : <><PlusIcon className="h-3.5 w-3.5" /> 添加</>}
+            </Button>
+          </form>
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {admins.length} accounts
+          </span>
+        </Toolbar>
 
-      {admins.length === 0 ? (
-        <EmptyState
-          icon={ShieldIcon}
-          title="暂无管理员"
-          description="添加至少一个管理员后，Bot 才能安全地处理管理命令。"
-        />
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-          {admins.map((id) => (
-            <Card key={id} className="flex items-center justify-between gap-3 p-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <UsersIcon className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="truncate font-mono text-sm font-medium text-foreground">
-                    {id}
-                  </div>
-                  <div className="text-xs text-muted-foreground">QQ 用户</div>
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => handleRemove(id)}
-                disabled={saving}
-                className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              >
-                <Trash2Icon className="h-4 w-4" />
-              </Button>
-            </Card>
-          ))}
-        </div>
-      )}
+        {admins.length === 0 ? (
+          <EmptyState
+            icon={ShieldIcon}
+            title="暂无管理员"
+            description="添加至少一个 QQ 后，Bot 才能安全处理管理命令。"
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="w-12 font-mono">#</TableHead>
+                  <TableHead className="font-mono">QQ</TableHead>
+                  <TableHead className="font-mono">Role</TableHead>
+                  <TableHead className="w-20 font-mono text-right">操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {admins.map((id, idx) => (
+                  <TableRow key={id}>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {idx + 1}
+                    </TableCell>
+                    <TableCell className="font-mono text-sm font-medium">{id}</TableCell>
+                    <TableCell>
+                      <span className="rounded bg-teal-50 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wide text-teal-800">
+                        Admin
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => handleRemove(id)}
+                        disabled={saving}
+                        className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        <Trash2Icon className="h-3.5 w-3.5" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </DataPanel>
     </div>
   )
 }

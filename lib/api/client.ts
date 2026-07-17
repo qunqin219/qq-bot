@@ -14,6 +14,9 @@ import type {
   MemoriesResponse,
   LogsResponse,
   ApiResult,
+  SandboxSendInput,
+  SandboxSendResponse,
+  SandboxStateResponse,
 } from '../shared/types';
 
 const client = axios.create({
@@ -88,6 +91,13 @@ export const api = {
   // 日志
   getLogs: (params: Record<string, unknown> = {}): Promise<LogsResponse> =>
     get('/logs', { params }),
+
+  // QQ 沙盒（不连接 NapCat）
+  getSandbox: (): Promise<SandboxStateResponse> => get('/sandbox'),
+  sendSandboxMessage: (data: SandboxSendInput): Promise<SandboxSendResponse> =>
+    post('/sandbox/messages', data),
+  resetSandbox: (): Promise<{ ok: true; state: SandboxStateResponse }> =>
+    post('/sandbox/reset'),
 
   // AI 上下文会话
   getConversations: (): Promise<ConversationsResponse> => get('/conversations'),
