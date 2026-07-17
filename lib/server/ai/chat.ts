@@ -13,7 +13,7 @@ import {
   fallbackToolMessages,
   summarizeRequestedFunctionCalls,
 } from './utils.js';
-import { sanitizeModelReply } from './sanitize.js';
+import { sanitizeModelReply, stripUnrequestedLinks } from './sanitize.js';
 import { resolveNumber, sleep, isRetryableHttpStatus, retryDelayMs } from './retry.js';
 import {
   DEFAULT_MAX_TOOL_ROUNDS,
@@ -153,10 +153,14 @@ async function chat(
       }
 
       const sanitizedReply = sanitizeModelReply(rawReply);
-      const reply = sanitizedReply.text;
+      const reply = stripUnrequestedLinks(sanitizedReply.text, userMessage);
       const responseMetadata = provider.summarizeResponseMetadata(data);
       if (responseMetadata) {
         console.log(`[ToolAudit] builtin_metadata round=${round} ${compactJson(responseMetadata)}`);
+      }
+      const builtinToolCalls = provider.extractBuiltinToolCalls(data);
+      if (builtinToolCalls.length > 0 && typeof options.onBuiltinToolCalls === 'function') {
+        options.onBuiltinToolCalls(builtinToolCalls, { round });
       }
       if (functionCalls.length === 0 || typeof options.executeFunctionCall !== 'function') {
         if (sanitizedReply.leaked) {

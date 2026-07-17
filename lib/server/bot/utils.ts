@@ -58,7 +58,10 @@ function buildEnabledToolAuditList(cfg: BotConfig, functionDeclarations: Array<R
     .filter(Boolean);
   if (cfg.ai_google_search_enabled === true) names.push('googleSearch');
   if (cfg.ai_url_context_enabled === true) names.push('urlContext');
-  return names.length ? names.join(',') : '-';
+  if (cfg.ai_provider === 'openai' && cfg.ai_web_search_enabled === true) names.push('web_search');
+  if (cfg.ai_provider === 'openai' && cfg.ai_web_fetch_enabled === true) names.push('web_fetch');
+  const uniqueNames = [...new Set(names)];
+  return uniqueNames.length ? uniqueNames.join(',') : '-';
 }
 
 function extractReplyMessageId(msg: unknown): string | null {

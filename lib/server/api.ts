@@ -29,7 +29,6 @@ import { cancelRun } from './agent/run-controller.js';
 import { resolveApproval } from './agent/runner.js';
 import { qqSandbox, SandboxRequestError } from './sandbox.js';
 import {
-  CONFIG_FILE,
   CONVERSATIONS_FILE,
   DATA_DIR,
   INDEX_HTML,
@@ -39,6 +38,7 @@ import {
   PANEL_DIST,
   SERVER_LOG_FILE,
   SESSIONS_FILE,
+  getConfigFile,
 } from './paths.js';
 
 type ConfigRecord = Record<string, any>;
@@ -156,7 +156,7 @@ function isViteDevEnabled(): boolean {
 
 function isRuntimeDataPath(filePath: string): boolean {
   const runtimePaths = [
-    CONFIG_FILE,
+    getConfigFile(),
     CONVERSATIONS_FILE,
     DATA_DIR,
     LOG_DIR,

@@ -19,6 +19,7 @@ import {
   buildModelContentForHistory,
   countInlineImageParts,
   extractFunctionCalls,
+  extractBuiltinToolCalls,
   extractOutputText,
   extractThoughtText,
   getLastUserContent,
@@ -57,6 +58,10 @@ const OpenAIProvider: LLMProvider = {
 
   extractOutputText(data: OpenAIResponse) {
     return extractOutputText(data);
+  },
+
+  extractBuiltinToolCalls(data: OpenAIResponse) {
+    return extractBuiltinToolCalls(data);
   },
 
   getModelContent(data: OpenAIResponse) {

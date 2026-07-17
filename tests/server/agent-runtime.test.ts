@@ -66,6 +66,13 @@ test('agent runner persists run parts and supports durable tool approval', async
   };
 
   const previous = ai._overrideChat((async (_input: unknown, _history: unknown, _cfg: unknown, options: Record<string, any>) => {
+    options.onBuiltinToolCalls([{
+      callId: 'ws_agent_test',
+      name: 'web_search',
+      status: 'completed',
+      input: { action: 'search', queries: ['测试查询'] },
+      output: { source_count: 1 },
+    }], { round: 1 });
     const result = await options.executeFunctionCall('qq_mute_member', { target_user_id: 222, duration_seconds: 60 }, {
       round: 1,
       index: 1,
@@ -80,7 +87,14 @@ test('agent runner persists run parts and supports durable tool approval', async
     assert.equal(banCalls, 0);
     const approvals = agentRunStore.listApprovals('pending');
     assert.equal(approvals.length, 1);
-    assert.ok(agentRunStore.listParts(turn.run.id).some((part) => part.type === 'tool_call'));
+    const parts = agentRunStore.listParts(turn.run.id);
+    assert.ok(parts.some((part) => part.type === 'tool_call'));
+    assert.ok(parts.some((part) => (
+      part.type === 'tool_call' && part.tool_name === 'web_search' && part.metadata.builtin === true
+    )));
+    assert.ok(parts.some((part) => (
+      part.type === 'tool_result' && part.tool_name === 'web_search' && part.metadata.builtin === true
+    )));
 
     const approved = await resolveApproval({
       approvalId: approvals[0].id,

@@ -1,6 +1,6 @@
 // OpenAI Responses API 响应解析与工具循环续接
 
-import type { FunctionCall, SanitizedReply, ToolResult } from '../types.js';
+import type { BuiltinToolAudit, FunctionCall, SanitizedReply, ToolResult } from '../types.js';
 import type { OpenAIInputContent, OpenAIRequestBody } from './request.js';
 
 import { INTERNAL_INLINE_PARTS_FIELD } from '../types.js';
@@ -14,11 +14,6 @@ export type OpenAIResponse = {
   output?: Array<Record<string, any>>;
   usage?: Record<string, any>;
   reasoning?: Record<string, any>;
-};
-
-type WebCitation = {
-  title: string;
-  url: string;
 };
 
 function cloneJson<T>(value: T): T | null {
@@ -51,6 +46,37 @@ function extractFunctionCalls(data: OpenAIResponse): FunctionCall[] {
     }));
 }
 
+function extractBuiltinToolCalls(data: OpenAIResponse): BuiltinToolAudit[] {
+  return (data.output || [])
+    .filter((item) => item?.type === 'web_search_call')
+    .map((item) => {
+      const action = item.action && typeof item.action === 'object' ? item.action : {};
+      const queries = Array.isArray(action.queries)
+        ? action.queries.map(String).slice(0, 10)
+        : (action.query ? [String(action.query)] : []);
+      const sources = (Array.isArray(action.sources) ? action.sources : [])
+        .slice(0, 20)
+        .map((source: Record<string, unknown>) => ({
+          title: citationTitle(source?.title),
+          url: safeCitationUrl(source?.url),
+        }))
+        .filter((source: { title: string; url: string }) => source.title || source.url);
+      return {
+        callId: item.id ? String(item.id) : undefined,
+        name: 'web_search',
+        status: String(item.status || 'completed'),
+        input: {
+          action: String(action.type || 'search'),
+          ...(queries.length > 0 ? { queries } : {}),
+        },
+        output: {
+          source_count: sources.length,
+          ...(sources.length > 0 ? { sources } : {}),
+        },
+      };
+    });
+}
+
 function safeCitationUrl(value: unknown): string {
   try {
     const url = new URL(String(value || '').trim());
@@ -68,32 +94,6 @@ function citationTitle(value: unknown): string {
     .slice(0, 160);
 }
 
-function extractCitations(data: OpenAIResponse): WebCitation[] {
-  const citations: WebCitation[] = [];
-  const seen = new Set<string>();
-  for (const item of data.output || []) {
-    if (item?.type !== 'message') continue;
-    for (const content of Array.isArray(item.content) ? item.content : []) {
-      for (const annotation of Array.isArray(content?.annotations) ? content.annotations : []) {
-        if (annotation?.type !== 'url_citation') continue;
-        const url = safeCitationUrl(annotation.url);
-        if (!url || seen.has(url)) continue;
-        seen.add(url);
-        citations.push({ title: citationTitle(annotation.title), url });
-      }
-    }
-  }
-  return citations.slice(0, 8);
-}
-
-function appendCitations(text: string, citations: WebCitation[]): string {
-  if (!text || citations.length === 0) return text;
-  const lines = citations.map((citation) => (
-    citation.title ? `- ${citation.title}\n  ${citation.url}` : `- ${citation.url}`
-  ));
-  return `${text}\n\n来源：\n${lines.join('\n')}`;
-}
-
 function extractOutputText(data: OpenAIResponse): string {
   const chunks: string[] = [];
   for (const item of data.output || []) {
@@ -104,8 +104,7 @@ function extractOutputText(data: OpenAIResponse): string {
       }
     }
   }
-  const text = (chunks.join('') || String(data.output_text || '')).trim();
-  return appendCitations(text, extractCitations(data));
+  return (chunks.join('') || String(data.output_text || '')).trim();
 }
 
 function splitToolResponse(response: any): { publicResponse: any; images: OpenAIInputContent[] } {
@@ -254,13 +253,12 @@ function extractThoughtText(data: OpenAIResponse): string {
 }
 
 export {
-  appendCitations,
   appendToolResults,
   buildFunctionResponseParts,
   buildModelContentForHistory,
   countInlineImageParts,
   extractFunctionCalls,
-  extractCitations,
+  extractBuiltinToolCalls,
   extractOutputText,
   extractThoughtText,
   getLastUserContent,

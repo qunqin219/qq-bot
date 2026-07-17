@@ -16,12 +16,14 @@ import { stripCqCodes, getBeijingTimeText } from '../utils.js';
 import {
   MAX_IMAGES_PER_MESSAGE,
   NO_THOUGHT_LEAK_SYSTEM_INSTRUCTION,
+  NO_UNREQUESTED_LINKS_SYSTEM_INSTRUCTION,
 } from '../types.js';
 
 function buildSystemInstruction(systemPrompt: unknown, extraSystemInstruction: unknown = ''): string {
   return [
     getBeijingTimeText(),
     NO_THOUGHT_LEAK_SYSTEM_INSTRUCTION,
+    NO_UNREQUESTED_LINKS_SYSTEM_INSTRUCTION,
     String(systemPrompt || '').trim(),
     String(extraSystemInstruction || '').trim(),
   ].filter(Boolean).join('\n');

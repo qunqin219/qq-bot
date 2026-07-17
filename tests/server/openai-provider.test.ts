@@ -53,6 +53,7 @@ test('OpenAI request builder supports the complete GPT-5.6 family and Responses 
     assert.equal(body.model, model);
     assert.deepEqual(body.reasoning, { effort: 'xhigh' });
     assert.match(body.instructions, /只执行经过授权的操作/);
+    assert.match(body.instructions, /默认不要在回复中输出 URL/);
     assert.deepEqual(body.input.slice(0, 2).map((item: any) => item.role), ['user', 'assistant']);
     assert.equal(body.input.at(-1).content[0].type, 'input_text');
     assert.equal(body.input.at(-1).content[1].type, 'input_image');
@@ -145,7 +146,7 @@ test('OpenAI tool loop preserves call_id and appends tool-provided images', asyn
   }
 });
 
-test('OpenAI provider consumes Responses SSE streams and reconstructs citations', async () => {
+test('OpenAI provider consumes Responses SSE streams without exposing unsolicited citations', async () => {
   const oldFetch = global.fetch;
   let requestBody: Record<string, any> | null = null;
   global.fetch = (async (_url: string, init: Record<string, any>) => {
@@ -174,17 +175,16 @@ test('OpenAI provider consumes Responses SSE streams and reconstructs citations'
       ai_web_search_enabled: true,
     }));
     assert.equal((requestBody as Record<string, any> | null)?.stream, true);
-    assert.match(reply || '', /流式搜索完成/);
-    assert.match(reply || '', /OpenAI Docs/);
-    assert.match(reply || '', /https:\/\/developers\.openai\.com\//);
+    assert.equal(reply, '流式搜索完成。');
   } finally {
     global.fetch = oldFetch;
   }
 });
 
-test('OpenAI Responses web_search is configurable and exposes clickable citations', async () => {
+test('OpenAI Responses web_search is configurable and hides unsolicited links and sources', async () => {
   const oldFetch = global.fetch;
   let requestBody: Record<string, any> | null = null;
+  let builtinAudits: Array<Record<string, any>> = [];
   global.fetch = (async (_url: string, init: Record<string, any>) => {
     requestBody = JSON.parse(String(init.body));
     return jsonResponse({
@@ -210,7 +210,7 @@ test('OpenAI Responses web_search is configurable and exposes clickable citation
           content: [
             {
               type: 'output_text',
-              text: '今天有一条值得关注的科技新闻。',
+              text: '今天有一条值得关注的科技新闻。详情见 ([example.com](https://example.com/news))。\n\n来源：\n- Example News\n  https://example.com/news',
               annotations: [
                 {
                   type: 'url_citation',
@@ -239,7 +239,9 @@ test('OpenAI Responses web_search is configurable and exposes clickable citation
       ai_model: 'gpt-5.6-luna',
       ai_web_search_enabled: true,
       ai_web_search_context_size: 'high',
-    }));
+    }), {
+      onBuiltinToolCalls: (calls) => { builtinAudits = calls; },
+    });
 
     const capturedBody = requestBody as Record<string, any> | null;
     assert.ok(capturedBody);
@@ -248,9 +250,43 @@ test('OpenAI Responses web_search is configurable and exposes clickable citation
     ]);
     assert.deepEqual((capturedBody as Record<string, any>).include, ['web_search_call.action.sources']);
     assert.match(reply || '', /今天有一条值得关注的科技新闻/);
-    assert.match(reply || '', /来源：/);
-    assert.match(reply || '', /Example News/);
-    assert.equal((reply || '').match(/https:\/\/example\.com\/news/g)?.length, 1);
+    assert.doesNotMatch(reply || '', /来源：/);
+    assert.doesNotMatch(reply || '', /https:\/\//);
+    assert.doesNotMatch(reply || '', /example\.com/);
+    assert.deepEqual(builtinAudits, [{
+      callId: 'ws_1',
+      name: 'web_search',
+      status: 'completed',
+      input: { action: 'search', queries: ['今天的科技新闻'] },
+      output: {
+        source_count: 1,
+        sources: [{ title: 'Example News', url: 'https://example.com/news' }],
+      },
+    }]);
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
+test('OpenAI provider preserves links when the user explicitly requests them', async () => {
+  const oldFetch = global.fetch;
+  global.fetch = (async () => jsonResponse({
+    id: 'resp_requested_link',
+    model: 'gpt-5.6-sol',
+    status: 'completed',
+    output: [{
+      type: 'message',
+      role: 'assistant',
+      content: [{
+        type: 'output_text',
+        text: '官网链接：https://openai.com/',
+      }],
+    }],
+  })) as any;
+
+  try {
+    const reply = await ai.chat('请给我官网链接', [], makeCfg());
+    assert.equal(reply, '官网链接：https://openai.com/');
   } finally {
     global.fetch = oldFetch;
   }

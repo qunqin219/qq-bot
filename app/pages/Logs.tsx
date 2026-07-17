@@ -41,10 +41,12 @@ interface ParsedLog {
   noisy: boolean
 }
 
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g')
+
 /** 去掉 ANSI / 残留颜色码，避免 [36m [1m 这类垃圾字符 */
 function stripAnsi(input: string): string {
   return input
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(ANSI_ESCAPE_RE, '')
     .replace(/\u009b[[0-9;?]*[ -/]*[@-~]/g, '')
     .replace(/\[(?:\d{1,3};)*\d{1,3}m/g, '')
     .replace(/\r/g, '')
@@ -76,7 +78,7 @@ function parseLogLine(raw: string): ParsedLog {
   )
 
   let time = ''
-  let level: LogLevel = 'OTHER'
+  let level: LogLevel
   let rest = clean
 
   if (head) {
@@ -100,9 +102,15 @@ function parseLogLine(raw: string): ParsedLog {
   }
 
   // normalize common sources
-  if (/^toolaudit$/i.test(source)) source = 'Tool'
-  if (/^botcore$/i.test(source)) source = 'Bot'
-  if (/^imagecache$/i.test(source)) source = 'Img'
+  const sourceKey = source.toLowerCase()
+  if (sourceKey === 'toolaudit' || sourceKey === 'tool') source = 'Tool'
+  else if (sourceKey === 'botcore' || sourceKey === 'bot') source = 'Bot'
+  else if (sourceKey === 'imagecache' || sourceKey === 'img') source = 'Img'
+  else if (sourceKey === 'agent') source = 'Agent'
+  else if (sourceKey === 'ai') source = 'AI'
+  else if (sourceKey === 'ws') source = 'WS'
+  else if (sourceKey === 'msg') source = 'Msg'
+  else if (sourceKey === 'vite') source = 'vite'
 
   return {
     raw,
@@ -116,46 +124,63 @@ function parseLogLine(raw: string): ParsedLog {
   }
 }
 
-const levelStyles: Record<LogLevel, { chip: string; row: string; label: string }> = {
+const levelStyles: Record<LogLevel, { chip: string; label: string }> = {
   ERROR: {
     chip: 'bg-red-100 text-red-700 ring-1 ring-red-200',
-    row: 'bg-red-50/80',
     label: '错误',
   },
   WARN: {
     chip: 'bg-amber-100 text-amber-800 ring-1 ring-amber-200',
-    row: 'bg-amber-50/70',
     label: '警告',
   },
   INFO: {
     chip: 'bg-sky-100 text-sky-800 ring-1 ring-sky-200',
-    row: '',
     label: '信息',
   },
   LOG: {
     chip: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200',
-    row: '',
     label: '日志',
   },
   DEBUG: {
     chip: 'bg-teal-50 text-teal-800 ring-1 ring-teal-200',
-    row: '',
     label: '调试',
   },
   OTHER: {
     chip: 'bg-secondary text-muted-foreground ring-1 ring-border',
-    row: '',
     label: '其他',
   },
 }
 
+/** 按来源着色：底色 + 来源文字色（错误/警告级别优先用级别底色） */
+const sourceStyles: Record<string, { row: string; text: string }> = {
+  Bot: { row: 'bg-teal-50', text: 'text-teal-800' },
+  AI: { row: 'bg-sky-50', text: 'text-sky-800' },
+  Agent: { row: 'bg-indigo-50', text: 'text-indigo-800' },
+  Tool: { row: 'bg-amber-50', text: 'text-amber-900' },
+  WS: { row: 'bg-slate-100', text: 'text-slate-700' },
+  Msg: { row: 'bg-emerald-50', text: 'text-emerald-800' },
+  Img: { row: 'bg-rose-50', text: 'text-rose-800' },
+  vite: { row: 'bg-stone-50', text: 'text-stone-600' },
+}
+
+function rowBackground(log: ParsedLog): string {
+  if (log.level === 'ERROR') return 'bg-red-50'
+  if (log.level === 'WARN') return 'bg-amber-50'
+  return sourceStyles[log.source]?.row || 'bg-white'
+}
+
+function sourceTextClass(source: string): string {
+  return sourceStyles[source]?.text || 'text-muted-foreground'
+}
+
 function LogRow({ log, index }: { log: ParsedLog; index: number }) {
   const style = levelStyles[log.level]
+  const srcClass = sourceTextClass(log.source)
   return (
     <div
       className={cn(
-        'grid grid-cols-[52px_44px_minmax(0,1fr)] gap-x-2 border-b border-border/70 px-3 py-1.5 sm:grid-cols-[64px_48px_72px_minmax(0,1fr)]',
-        style.row,
+        'grid grid-cols-[52px_44px_minmax(0,1fr)] gap-x-2 border-b border-border/60 px-3 py-1.5 sm:grid-cols-[64px_48px_72px_minmax(0,1fr)]',
+        rowBackground(log),
         log.noisy && 'opacity-60'
       )}
     >
@@ -173,12 +198,12 @@ function LogRow({ log, index }: { log: ParsedLog; index: number }) {
           {style.label}
         </span>
       </span>
-      <span className="hidden truncate pt-0.5 font-mono text-[11px] text-teal-700 sm:block">
+      <span className={cn('hidden truncate pt-0.5 font-mono text-[11px] font-medium sm:block', srcClass)}>
         {log.source || '—'}
       </span>
       <div className="min-w-0">
         {log.source ? (
-          <span className="mr-1.5 inline font-mono text-[11px] text-teal-700 sm:hidden">
+          <span className={cn('mr-1.5 inline font-mono text-[11px] font-medium sm:hidden', srcClass)}>
             [{log.source}]
           </span>
         ) : null}
@@ -221,14 +246,12 @@ export default function Logs() {
   useEffect(() => {
     setLoading(true)
     fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     if (!autoRefresh) return undefined
     const timer = setInterval(fetchData, 3000)
     return () => clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh, limit, query])
 
   const parsed = useMemo(() => {

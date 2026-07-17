@@ -54,6 +54,10 @@ const GeminiProvider: LLMProvider = {
     return geminiExtractOutputText(data);
   },
 
+  extractBuiltinToolCalls() {
+    return [];
+  },
+
   getModelContent(data: GeminiResponse) {
     return data?.candidates?.[0]?.content;
   },

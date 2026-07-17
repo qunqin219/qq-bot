@@ -3,7 +3,14 @@
 // chat() 工具循环通过此接口与具体模型交互。
 // Gemini 与 OpenAI Responses API 都通过同一套 Agent 工具循环运行。
 
-import type { AiConfig, ChatOptions, FunctionCall, SanitizedReply, ToolResult } from './types.js';
+import type {
+  AiConfig,
+  BuiltinToolAudit,
+  ChatOptions,
+  FunctionCall,
+  SanitizedReply,
+  ToolResult,
+} from './types.js';
 
 export interface LLMProvider {
   readonly name: string;
@@ -27,6 +34,9 @@ export interface LLMProvider {
 
   // 从响应中提取可见文本
   extractOutputText(data: any): string;
+
+  // 提取由模型渠道在服务端执行的内置工具调用，例如 OpenAI web_search。
+  extractBuiltinToolCalls(data: any): BuiltinToolAudit[];
 
   // 从响应中获取模型内容对象（用于追加到请求体和历史记录）
   getModelContent(data: any): any | undefined;

@@ -61,7 +61,6 @@ export default function Messages() {
 
   useEffect(() => {
     fetchData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterType])
 
   const filteredChats = useMemo(() => {

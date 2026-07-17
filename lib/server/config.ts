@@ -1,6 +1,6 @@
 // 配置管理 —— JSON 文件持久化管理员列表等配置
 
-import { CONFIG_FILE } from './paths.js';
+import { getConfigFile } from './paths.js';
 import { DEFAULT_AI_SYSTEM_PROMPT, normalizeSystemPrompt } from '../shared/system-prompt.js';
 import { readJsonFile, writeJsonFileAtomic } from './json-store.js';
 
@@ -124,7 +124,7 @@ function isConfigObject(data: unknown): data is Partial<BotConfig> & Record<stri
 }
 
 export function loadConfig(): BotConfig {
-  const cfg = readJsonFile<Partial<BotConfig> & Record<string, unknown> | null>(CONFIG_FILE, null, isConfigObject);
+  const cfg = readJsonFile<Partial<BotConfig> & Record<string, unknown> | null>(getConfigFile(), null, isConfigObject);
   if (cfg) {
     // 合并默认值
     const merged = { ...DEFAULT_CONFIG, ...cfg };
@@ -146,5 +146,5 @@ export function saveConfig(cfg: Partial<BotConfig> & Record<string, unknown>): v
   const cleanCfg = { ...cfg };
   delete cleanCfg.auto_reply;
   delete cleanCfg.reply_text;
-  writeJsonFileAtomic(CONFIG_FILE, cleanCfg);
+  writeJsonFileAtomic(getConfigFile(), cleanCfg);
 }

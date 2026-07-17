@@ -122,6 +122,28 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       maxToolCalls: Math.max(1, Math.min(20, Number(cfg.agent_max_tool_calls || 8))),
       signal,
       onFinalTurn: (turn: Record<string, any>) => { finalProviderTurn = turn; },
+      onBuiltinToolCalls: (calls, meta) => {
+        for (const call of calls) {
+          const part = agentRunStore.addPart({
+            id: randomUUID(), run_id: runId, session_id: session.id, type: 'tool_call', status: call.status,
+            tool_name: call.name, content: textForStore(call.input), metadata: {
+              round: meta.round,
+              builtin: true,
+              provider: String(cfg.ai_provider || ''),
+              provider_call_id: call.callId || '',
+            },
+          });
+          agentRunStore.addPart({
+            id: randomUUID(), run_id: runId, session_id: session.id, type: 'tool_result', status: call.status,
+            tool_name: call.name, content: textForStore(call.output), metadata: {
+              tool_call_id: part.id,
+              builtin: true,
+              provider: String(cfg.ai_provider || ''),
+            },
+          });
+          agentEventBus.emit({ type: 'tool.completed', runId, toolCallId: part.id, tool: call.name, result: call.output });
+        }
+      },
       executeFunctionCall: async (name, args, meta = { round: 1, index: 1, executedToolCalls: 1 }) => {
         const part: AgentPartRecord = agentRunStore.addPart({
           id: randomUUID(), run_id: runId, session_id: session.id, type: 'tool_call', status: 'pending',

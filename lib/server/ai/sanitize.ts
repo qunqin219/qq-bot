@@ -47,6 +47,44 @@ function isDegenerateJsonFragment(text: string): boolean {
   return !/[\p{L}]/u.test(text);
 }
 
+const LINK_REQUEST_NOUN = '(?:链接|网址|URL|来源|出处|参考资料|参考文献|links?|urls?|sources?|citations?|references?)';
+
+function userExplicitlyRequestsLinks(userMessage: unknown): boolean {
+  const text = String(userMessage || '').replace(/\[CQ:[^\]]*]/gi, ' ').trim();
+  if (!text) return false;
+  if (new RegExp(`(?:不要|不用|无需|不需要|别|无需提供).{0,8}${LINK_REQUEST_NOUN}`, 'i').test(text)) {
+    return false;
+  }
+  return new RegExp(
+    `(?:给我|发我|提供|列出|附上|贴出|展示|告诉我|补充|带上|需要|想要|要看|求).{0,12}${LINK_REQUEST_NOUN}` +
+    `|${LINK_REQUEST_NOUN}.{0,12}(?:给我|发我|提供|列出|附上|贴出|展示|是什么|在哪里|有吗)` +
+    `|(?:give|send|provide|show|list|include|cite|share).{0,20}${LINK_REQUEST_NOUN}`,
+    'i'
+  ).test(text);
+}
+
+function stripUnrequestedLinks(text: string, userMessage: unknown): string {
+  if (!text || userExplicitlyRequestsLinks(userMessage)) return text;
+
+  let next = text.replace(
+    /(?:^|\n)\s*(?:来源|出处|参考(?:资料|来源|文献)|sources?|references?|citations?)\s*[:：]?\s*\n?[\s\S]*$/i,
+    ''
+  );
+  next = next.replace(/!\[[^\]]*]\(\s*<?https?:\/\/[^\s)>]+>?\s*\)/gi, '');
+  next = next.replace(
+    /\[([^\]]*)]\(\s*<?https?:\/\/[^\s)>]+>?\s*\)/gi,
+    (_match, label: string) => /^(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/.*)?$/i.test(label.trim()) ? '' : label.trim()
+  );
+  next = next.replace(/<https?:\/\/[^\s>]+>/gi, '');
+  next = next.replace(/https?:\/\/[^\s<>\])}]+/gi, '');
+  next = next.replace(/\bwww\.[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s<>\])}]*)?/gi, '');
+  next = next.replace(/[（(]\s*[）)]/g, '');
+  next = next.replace(/[ \t]+([，。！？；：,.!?;:])/g, '$1');
+  next = next.replace(/[ \t]{2,}/g, ' ');
+  next = next.replace(/\n[ \t]+/g, '\n');
+  return next.trim();
+}
+
 function sanitizeModelReply(raw: unknown): SanitizedReply {
   const original = String(raw || '').trim();
   if (!original) return { text: '', leaked: false, blocked: false, reason: '' };
@@ -88,4 +126,6 @@ function sanitizeModelReply(raw: unknown): SanitizedReply {
 
 export {
   sanitizeModelReply,
+  stripUnrequestedLinks,
+  userExplicitlyRequestsLinks,
 };

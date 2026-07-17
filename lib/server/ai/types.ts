@@ -19,6 +19,12 @@ export const NO_THOUGHT_LEAK_SYSTEM_INSTRUCTION = [
   '不要输出 _thought、thought、thinking、analysis、reasoning、scratchpad、<think>、<analysis>、```thought 这类字段或标记。',
 ].join('\n');
 
+export const NO_UNREQUESTED_LINKS_SYSTEM_INSTRUCTION = [
+  '默认不要在回复中输出 URL、网址、Markdown 链接、来源列表或参考资料。',
+  '只有当前用户明确要求提供链接、网址、来源、出处或参考资料时，才可以输出这些内容。',
+  '用户没有主动要求时，即使使用了搜索或网页工具，也只回答正文结论。',
+].join('\n');
+
 export const THOUGHT_LEAK_REPAIR_PROMPT = [
   '上一条候选回复包含内部草稿、思维链，或者是不完整/异常的残留内容（比如工具调用碎片），已被系统拦截。',
   '请重新回答当前用户，只输出最终自然回复正文，用完整的自然语言句子回答，不要输出任何 JSON、代码片段或残缺内容。',
@@ -38,6 +44,14 @@ export type ToolResult = {
   callId?: string;
   name: string;
   response: any;
+};
+
+export type BuiltinToolAudit = {
+  callId?: string;
+  name: string;
+  status: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
 };
 
 export type SanitizedReply = {
@@ -63,6 +77,10 @@ export type ChatOptions = {
   autoAttachImages?: boolean;
   extraParts?: Record<string, unknown>[];
   onFinalTurn?: (_turn: { userContent: any; modelContent: any; reply: string }) => void;
+  onBuiltinToolCalls?: (
+    calls: BuiltinToolAudit[],
+    context: { round: number }
+  ) => void;
   signal?: AbortSignal;
 };
 

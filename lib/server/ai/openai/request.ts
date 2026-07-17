@@ -8,6 +8,7 @@ import { getBeijingTimeText, stripCqCodes } from '../utils.js';
 import {
   MAX_IMAGES_PER_MESSAGE,
   NO_THOUGHT_LEAK_SYSTEM_INSTRUCTION,
+  NO_UNREQUESTED_LINKS_SYSTEM_INSTRUCTION,
 } from '../types.js';
 
 export type OpenAIInputContent =
@@ -62,6 +63,7 @@ function buildInstructions(systemPrompt: unknown, extraSystemInstruction: unknow
   return [
     getBeijingTimeText(),
     NO_THOUGHT_LEAK_SYSTEM_INSTRUCTION,
+    NO_UNREQUESTED_LINKS_SYSTEM_INSTRUCTION,
     String(systemPrompt || '').trim(),
     String(extraSystemInstruction || '').trim(),
   ].filter(Boolean).join('\n');
@@ -189,9 +191,9 @@ async function buildRequestBody(
   );
   if (tools.length > 0) body.tools = tools;
   if (cfg.ai_web_search_enabled === true) {
+    // 来源只用于后台工具审计，不再自动拼接到发给 QQ 用户的正文。
     body.include = ['web_search_call.action.sources'];
   }
-
   if (cfg.ai_thinking_enabled === true) {
     body.reasoning = { effort: normalizeReasoningEffort(cfg.ai_thinking_level) };
   }
