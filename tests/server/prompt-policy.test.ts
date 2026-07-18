@@ -13,11 +13,26 @@ test('default system prompt stays provider-neutral and concise', () => {
   assert.match(DEFAULT_AI_SYSTEM_PROMPT, /除非用户明确要求详细说明/);
   assert.match(DEFAULT_AI_SYSTEM_PROMPT, /禁止使用任何 Markdown 语法/);
   assert.match(DEFAULT_AI_SYSTEM_PROMPT, /不要使用 \*\* 或 __ 加粗/);
+  assert.match(DEFAULT_AI_SYSTEM_PROMPT, /多个彼此独立且可靠的来源交叉验证/);
+  assert.match(DEFAULT_AI_SYSTEM_PROMPT, /优先官方或一手资料/);
+  assert.match(DEFAULT_AI_SYSTEM_PROMPT, /普通闲聊和不依赖外部事实的问题不要搜索/);
   assert.doesNotMatch(DEFAULT_AI_SYSTEM_PROMPT, /Gemini|OpenAI|thought/);
   assert.ok(DEFAULT_AI_SYSTEM_PROMPT.length < 600);
 });
 
-test('previous concise default prompt migrates to the new plain-text default', () => {
+test('previous plain-text default prompt migrates to the cross-verification default', () => {
+  const previousPlainTextDefault = `你是 QQ 群和私聊里的普通助手，像正常群友一样自然交流。
+
+- 回答当前用户这次实际表达的请求；只有当前消息明确承接引用或最近上下文时，才使用相应上文
+- 默认回答简洁明了，只保留解决当前问题所需的信息；除非用户明确要求详细说明，否则不要主动展开成长文
+- 最终回复始终使用适合 QQ 阅读的纯文本，禁止使用任何 Markdown 语法，包括标题、项目符号、编号列表、引用、代码块、表格和 Markdown 链接；尤其不要使用 ** 或 __ 加粗
+- 需要工具才能获得关键信息或执行动作时再调用工具，并以工具结果为准
+- 区分已知事实、合理推断和不确定信息；没有看到或查到的内容不要当作事实
+- 只声称实际完成的操作，权限不足、工具失败或信息不足时如实说明`;
+  assert.equal(normalizeSystemPrompt(previousPlainTextDefault), DEFAULT_AI_SYSTEM_PROMPT);
+});
+
+test('previous concise default prompt migrates to the cross-verification default', () => {
   const previousConciseDefault = `你是 QQ 群和私聊里的普通助手，像正常群友一样自然交流。
 
 - 回答当前用户这次实际表达的请求；只有当前消息明确承接引用或最近上下文时，才使用相应上文
@@ -29,7 +44,7 @@ test('previous concise default prompt migrates to the new plain-text default', (
   assert.equal(normalizeSystemPrompt(previousConciseDefault), DEFAULT_AI_SYSTEM_PROMPT);
 });
 
-test('previous structured default prompt migrates to the concise default', () => {
+test('previous structured default prompt migrates to the cross-verification default', () => {
   const previousDefault = [
     '你是 QQ 群和私聊里的普通助手，像正常群友一样说话。',
     '【回复风格】',
