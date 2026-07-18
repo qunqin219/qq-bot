@@ -1,7 +1,6 @@
-import type { BotConfig, OneBotClient, OneBotEvent } from '../types.js';
+import type { OneBotClient, OneBotEvent } from '../types.js';
 
 import { conversationStore } from '../../store/index.js';
-import { resolveApproval } from '../../agent/runner.js';
 import { cancelRun } from '../../agent/run-controller.js';
 
 /**
@@ -10,8 +9,7 @@ import { cancelRun } from '../../agent/run-controller.js';
 async function handleCommand(
   cmd: string,
   event: OneBotEvent,
-  client: OneBotClient,
-  cfg: BotConfig = {}
+  client: OneBotClient
 ): Promise<void> {
   const userId = event.user_id;
   const groupId = event.group_id;
@@ -44,14 +42,6 @@ async function handleCommand(
     const key = conversationStore.getConversationKey(event);
     conversationStore.clearHistory(key);
     await reply('已清空当前上下文');
-  } else if (name === 'approve' || name === 'deny') {
-    const approvalId = String(parts[1] || '').trim();
-    if (!approvalId) {
-      await reply(`用法：/${name} <approval_id>`);
-      return;
-    }
-    const result = await resolveApproval({ approvalId, approve: name === 'approve', event, client, cfg });
-    await reply(String(result.message || (result.ok ? '操作完成' : '操作失败')));
   } else if (name === 'cancelrun') {
     const runId = String(parts[1] || '').trim();
     await reply(runId && cancelRun(runId) ? `已取消运行 ${runId}` : '没有找到正在执行的运行');
@@ -62,8 +52,6 @@ async function handleCommand(
       '/status - 状态\n' +
       '/clearcontext - 清空当前会话上下文\n' +
       '/clearctx - 清空当前会话上下文\n' +
-      '/approve <id> - 批准待执行工具\n' +
-      '/deny <id> - 拒绝待执行工具\n' +
       '/cancelrun <id> - 取消正在执行的 Agent 运行\n' +
       '/help - 帮助'
     );

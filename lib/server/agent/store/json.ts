@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  AgentApprovalRecord,
   AgentPartRecord,
   AgentRunRecord,
   AgentRunStore,
@@ -13,20 +12,20 @@ type State = {
   sessions: AgentSessionRecord[];
   runs: AgentRunRecord[];
   parts: AgentPartRecord[];
-  approvals: AgentApprovalRecord[];
 };
 
-const EMPTY: State = { sessions: [], runs: [], parts: [], approvals: [] };
+const EMPTY: State = { sessions: [], runs: [], parts: [] };
 
 function now(): string {
   return new Date().toISOString();
 }
 
 function read(): State {
-  return readJsonFile<State>(getAgentRuntimeFile(), structuredClone(EMPTY), (value): value is State => {
+  const state = readJsonFile<State>(getAgentRuntimeFile(), structuredClone(EMPTY), (value): value is State => {
     const item = value as State;
-    return Boolean(item && Array.isArray(item.sessions) && Array.isArray(item.runs) && Array.isArray(item.parts) && Array.isArray(item.approvals));
+    return Boolean(item && Array.isArray(item.sessions) && Array.isArray(item.runs) && Array.isArray(item.parts));
   });
+  return { sessions: state.sessions, runs: state.runs, parts: state.parts };
 }
 
 function write(state: State): void {
@@ -38,7 +37,7 @@ export const jsonAgentRunStore: AgentRunStore = {
     const state = read();
     let count = 0;
     for (const run of state.runs) {
-      if (!['queued', 'running', 'waiting_tool'].includes(run.status)) continue;
+      if (!['queued', 'running', 'waiting_tool', 'waiting_approval'].includes(run.status)) continue;
       run.status = 'interrupted';
       run.error ||= 'server restarted during run';
       run.updated_at = now();
@@ -117,38 +116,5 @@ export const jsonAgentRunStore: AgentRunStore = {
   },
   listParts(runId) {
     return read().parts.filter((item) => item.run_id === runId).sort((a, b) => a.created_at.localeCompare(b.created_at));
-  },
-  createApproval(input) {
-    const state = read();
-    const record: AgentApprovalRecord = { ...input, status: 'pending', created_at: now(), resolved_at: null };
-    state.approvals.push(record);
-    write(state);
-    return record;
-  },
-  resolveApproval(id, status) {
-    const state = read();
-    const approval = state.approvals.find((item) => item.id === id);
-    if (!approval) return null;
-    approval.status = status;
-    approval.resolved_at = now();
-    write(state);
-    return approval;
-  },
-  getApproval(id) {
-    return read().approvals.find((item) => item.id === id) || null;
-  },
-  listApprovals(status) {
-    const state = read();
-    const timestamp = now();
-    let changed = false;
-    for (const item of state.approvals) {
-      if (item.status === 'pending' && item.expires_at <= timestamp) {
-        item.status = 'expired';
-        item.resolved_at = timestamp;
-        changed = true;
-      }
-    }
-    if (changed) write(state);
-    return state.approvals.filter((item) => !status || item.status === status).sort((a, b) => b.created_at.localeCompare(a.created_at));
   },
 };

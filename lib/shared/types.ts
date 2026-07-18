@@ -74,8 +74,6 @@ export interface ConfigResponse {
   agent_run_timeout_ms: number;
   agent_tool_timeout_ms: number;
   agent_tool_result_max_chars: number;
-  agent_approval_ttl_ms: number;
-  agent_tool_permissions: Record<string, unknown>;
   [key: string]: unknown;
 }
 

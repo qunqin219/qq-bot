@@ -20,7 +20,7 @@ import { buildImageRefs } from '../tools/image.js';
 import type { ResolvedQuotedMessage } from './quote-chain.js';
 import { resolveQuotedMessageChain } from './quote-chain.js';
 
-const GROUP_MANAGEMENT_CONTEXT_TRIGGER = /(?:群成员|成员列表|禁言|解禁|解除禁言|全员禁言|群禁言|踢出|踢人|移出群|封禁|确认执行|确认禁言|确认解禁|确认踢出|确认全员禁言)/;
+const GROUP_MANAGEMENT_CONTEXT_TRIGGER = /(?:群成员|成员列表|禁言|解禁|解除禁言|全员禁言|群禁言|踢出|踢人|移出群|封禁)/;
 
 // 群聊最近消息（旧到新）。文字上下文、图片上下文都基于同一份结果，避免重复查询/过滤。
 function getRecentGroupMessages(event: OneBotEvent, cfg: BotConfig): Array<Record<string, any>> {

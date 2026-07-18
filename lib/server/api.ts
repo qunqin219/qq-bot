@@ -26,7 +26,6 @@ import { FileSessionStore } from './session-store.js';
 import { agentRunStore } from './agent/store/index.js';
 import { listAgents } from './agent/agents.js';
 import { cancelRun } from './agent/run-controller.js';
-import { resolveApproval } from './agent/runner.js';
 import { qqSandbox, SandboxRequestError } from './sandbox.js';
 import {
   CONVERSATIONS_FILE,
@@ -440,8 +439,6 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
       'agent_run_timeout_ms',
       'agent_tool_timeout_ms',
       'agent_tool_result_max_chars',
-      'agent_approval_ttl_ms',
-      'agent_tool_permissions',
     ];
     for (const key of allowedKeys) {
       if (body[key] !== undefined) {
@@ -644,7 +641,6 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
       description: agent.description,
       mode: agent.mode,
       tools: agent.tools,
-      permissions: agent.permissions,
       max_steps: agent.maxSteps,
     }));
     return res.json({ agents, total: agents.length });
@@ -670,52 +666,6 @@ async function configureApp(app: Express, client: OneBotWSClient, options: Confi
     if (!cancelled) return res.status(409).json({ detail: '该运行当前不在执行中' });
     agentRunStore.updateRun(runId, { status: 'cancelled', error: 'cancelled from admin API' });
     return res.json({ ok: true, run_id: runId });
-  });
-
-  app.get('/api/agent/approvals', requireAuth, (req, res) => {
-    const rawStatus = String(req.query.status || '').trim();
-    const status = ['pending', 'approved', 'denied', 'expired', 'consumed'].includes(rawStatus)
-      ? rawStatus as 'pending' | 'approved' | 'denied' | 'expired' | 'consumed'
-      : undefined;
-    const approvals = agentRunStore.listApprovals(status);
-    return res.json({ approvals, total: approvals.length });
-  });
-
-  app.post('/api/agent/approvals/:id/:action', requireAuth, async (req, res) => {
-    const approval = agentRunStore.getApproval(String(req.params.id || ''));
-    if (!approval) return res.status(404).json({ detail: '未找到审批请求' });
-    const action = String(req.params.action || '');
-    if (action !== 'approve' && action !== 'deny') return res.status(400).json({ detail: 'action 必须是 approve 或 deny' });
-    if (qqSandbox.isSandboxGroup(approval.group_id)) {
-      const result = await resolveApproval({
-        approvalId: approval.id,
-        approve: action === 'approve',
-        event: qqSandbox.buildApprovalEvent(approval.requester_id),
-        client: qqSandbox.client,
-        cfg: qqSandbox.getAgentConfig(),
-        trusted: true,
-      });
-      return res.status(result.ok ? 200 : 409).json(result);
-    }
-    if (!wsClient) return res.status(503).json({ detail: 'Bot 客户端不可用' });
-    if (action === 'approve' && !wsClient.connected) return res.status(503).json({ detail: 'Bot 未连接 NapCat，暂时不能执行审批工具' });
-    const login = wsClient.connected ? await wsClient.getLoginInfo() : null;
-    const result = await resolveApproval({
-      approvalId: approval.id,
-      approve: action === 'approve',
-      event: {
-        post_type: 'message',
-        message_type: approval.group_id ? 'group' : 'private',
-        group_id: approval.group_id || null,
-        user_id: approval.requester_id,
-        self_id: login?.data?.user_id || null,
-        raw_message: '确认执行',
-      },
-      client: wsClient,
-      cfg: loadConfig(),
-      trusted: true,
-    });
-    return res.status(result.ok ? 200 : 409).json(result);
   });
 
   // ── 前端静态文件 / SPA 路由 ─────────────────────────

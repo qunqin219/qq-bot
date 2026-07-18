@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  AgentApprovalRecord,
   AgentPartRecord,
   AgentRunRecord,
   AgentRunStore,
@@ -25,10 +24,6 @@ function mapPart(row: Record<string, any>): AgentPartRecord {
   return { ...row, metadata: parseMetadata(row.metadata) } as AgentPartRecord;
 }
 
-function mapApproval(row: Record<string, any>): AgentApprovalRecord {
-  return { ...row, args: parseMetadata(row.args) } as AgentApprovalRecord;
-}
-
 export const sqliteAgentRunStore: AgentRunStore = {
   recoverInterruptedRuns() {
     const timestamp = now();
@@ -36,7 +31,7 @@ export const sqliteAgentRunStore: AgentRunStore = {
       UPDATE agent_runs
       SET status = 'interrupted', error = CASE WHEN error = '' THEN 'server restarted during run' ELSE error END,
           updated_at = ?, completed_at = ?
-      WHERE status IN ('queued', 'running', 'waiting_tool')
+      WHERE status IN ('queued', 'running', 'waiting_tool', 'waiting_approval')
     `).run(timestamp, timestamp);
     return result.changes;
   },
@@ -135,37 +130,5 @@ export const sqliteAgentRunStore: AgentRunStore = {
   listParts(runId) {
     const rows = getDb().prepare('SELECT * FROM agent_parts WHERE run_id = ? ORDER BY created_at ASC').all(runId) as Array<Record<string, any>>;
     return rows.map(mapPart);
-  },
-
-  createApproval(input) {
-    const record: AgentApprovalRecord = { ...input, status: 'pending', created_at: now(), resolved_at: null };
-    getDb().prepare(`
-      INSERT INTO agent_approvals
-      (id, run_id, session_id, tool_name, args, requester_id, group_id, status, expires_at, created_at, resolved_at)
-      VALUES (@id, @run_id, @session_id, @tool_name, @args, @requester_id, @group_id, @status, @expires_at, @created_at, @resolved_at)
-    `).run({ ...record, args: JSON.stringify(record.args || {}) });
-    return record;
-  },
-
-  resolveApproval(id, status) {
-    const existing = this.getApproval(id);
-    if (!existing) return null;
-    const resolvedAt = now();
-    getDb().prepare('UPDATE agent_approvals SET status = ?, resolved_at = ? WHERE id = ?').run(status, resolvedAt, id);
-    return { ...existing, status, resolved_at: resolvedAt };
-  },
-
-  getApproval(id) {
-    const row = getDb().prepare('SELECT * FROM agent_approvals WHERE id = ?').get(id) as Record<string, any> | undefined;
-    return row ? mapApproval(row) : null;
-  },
-
-  listApprovals(status) {
-    const timestamp = now();
-    getDb().prepare('UPDATE agent_approvals SET status = \'expired\', resolved_at = ? WHERE status = \'pending\' AND expires_at <= ?').run(timestamp, timestamp);
-    const rows = status
-      ? getDb().prepare('SELECT * FROM agent_approvals WHERE status = ? ORDER BY created_at DESC').all(status)
-      : getDb().prepare('SELECT * FROM agent_approvals ORDER BY created_at DESC').all();
-    return (rows as Array<Record<string, any>>).map(mapApproval);
   },
 };

@@ -16,7 +16,7 @@ import { parseAiReplyDirective } from './bot/reply.js';
 import { withConversationLock } from './bot/conversation-lock.js';
 
 const BOT_ID = 99000001;
-// 负数 ID 不可能与真实 QQ 群冲突，也让审批路由能够可靠识别沙盒运行。
+// 负数 ID 不可能与真实 QQ 群冲突。
 const GROUP_ID = -990001;
 const OWNER_ID = 99001001;
 const MEMBER_ID = 99001002;
@@ -109,34 +109,6 @@ export class QQSandbox {
       },
       messages: this.messages,
     });
-  }
-
-  isSandboxGroup(groupId: number | string | null | undefined): boolean {
-    return Number(groupId) === GROUP_ID;
-  }
-
-  getAgentConfig(): BotConfig {
-    return this.sandboxConfig();
-  }
-
-  buildApprovalEvent(requesterId: number | string): OneBotEvent {
-    const member = this.members.find((item) => item.user_id === Number(requesterId) && !item.kicked)
-      || this.members.find((item) => item.user_id === OWNER_ID)!;
-    return {
-      post_type: 'message',
-      message_type: 'group',
-      group_id: GROUP_ID,
-      user_id: member.user_id,
-      self_id: BOT_ID,
-      raw_message: '确认执行',
-      message: '确认执行',
-      sender: {
-        user_id: member.user_id,
-        nickname: member.nickname,
-        card: member.card,
-        role: member.role,
-      },
-    };
   }
 
   async send(input: SandboxSendInput): Promise<SandboxSendResponse> {

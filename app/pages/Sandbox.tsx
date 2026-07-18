@@ -37,7 +37,7 @@ const scenarios: Record<SandboxMode, Array<{ label: string; text: string; trigge
   group: [
     { label: '群聊垫话', text: '今晚九点发布，先检查回归测试。', trigger: false },
     { label: '成员查询', text: '帮我查一下这个群里有哪些成员。', trigger: true },
-    { label: '管理工具', text: '确认禁言 QQ 99001002 10 分钟。', trigger: true },
+    { label: '管理工具', text: '禁言 QQ 99001002 10 分钟。', trigger: true },
   ],
 }
 

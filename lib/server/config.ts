@@ -46,8 +46,6 @@ type BotConfig = {
   agent_run_timeout_ms: number;
   agent_tool_timeout_ms: number;
   agent_tool_result_max_chars: number;
-  agent_approval_ttl_ms: number;
-  agent_tool_permissions: Record<string, 'allow' | 'ask' | 'deny' | Record<string, 'allow' | 'ask' | 'deny'>>;
 } & Record<string, unknown>;
 
 // 配置文件位于项目根目录，默认不提交到仓库。
@@ -98,21 +96,6 @@ export const DEFAULT_CONFIG: BotConfig = {
   agent_run_timeout_ms: 120000,          // 单次 Agent 运行超时
   agent_tool_timeout_ms: 30000,          // 单个工具执行超时
   agent_tool_result_max_chars: 24000,    // 交回模型前的工具结果最大字符数
-  agent_approval_ttl_ms: 600000,         // 危险工具审批有效期
-  agent_tool_permissions: {              // 可按工具或 group:<id> 覆盖 allow/ask/deny
-    qq_read_image: 'allow',
-    web_fetch: 'allow',
-    create_memory: 'allow',
-    edit_memory: 'allow',
-    delete_memory: 'allow',
-    qq_get_group_members: 'allow',
-    qq_set_group_whole_ban: 'ask',
-    qq_mute_all_manageable_members: 'ask',
-    qq_unmute_all_manageable_members: 'ask',
-    qq_mute_member: 'ask',
-    qq_unmute_member: 'ask',
-    qq_kick_member: 'ask',
-  },
 };
 
 /**
@@ -126,8 +109,16 @@ function isConfigObject(data: unknown): data is Partial<BotConfig> & Record<stri
 export function loadConfig(): BotConfig {
   const cfg = readJsonFile<Partial<BotConfig> & Record<string, unknown> | null>(getConfigFile(), null, isConfigObject);
   if (cfg) {
+    const activeCfg = { ...cfg };
+    const hadLegacyApprovalConfig = (
+      Object.hasOwn(activeCfg, 'agent_approval_ttl_ms') ||
+      Object.hasOwn(activeCfg, 'agent_tool_permissions')
+    );
+    delete activeCfg.agent_approval_ttl_ms;
+    delete activeCfg.agent_tool_permissions;
+    if (hadLegacyApprovalConfig) saveConfig(activeCfg);
     // 合并默认值
-    const merged = { ...DEFAULT_CONFIG, ...cfg };
+    const merged = { ...DEFAULT_CONFIG, ...activeCfg };
     return {
       ...merged,
       ai_system_prompt: normalizeSystemPrompt(merged.ai_system_prompt),
@@ -146,5 +137,7 @@ export function saveConfig(cfg: Partial<BotConfig> & Record<string, unknown>): v
   const cleanCfg = { ...cfg };
   delete cleanCfg.auto_reply;
   delete cleanCfg.reply_text;
+  delete cleanCfg.agent_approval_ttl_ms;
+  delete cleanCfg.agent_tool_permissions;
   writeJsonFileAtomic(getConfigFile(), cleanCfg);
 }

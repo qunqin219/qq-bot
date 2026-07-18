@@ -78,7 +78,7 @@ async function handleEvent(event: OneBotEvent, client: OneBotClient): Promise<vo
 
   // 命令处理（非管理员命令在前面的权限检查中已经被拦截）
   if (isCommand) {
-    await handleCommand(msg.slice(prefix.length), event, client, cfg);
+    await handleCommand(msg.slice(prefix.length), event, client);
     return;
   }
 

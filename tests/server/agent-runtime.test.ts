@@ -28,9 +28,9 @@ test('context budget keeps recent turns and compacts older messages', async () =
   assert.match(result.history.at(-1)?.text || '', /message-19/);
 });
 
-test('agent runner persists run parts and supports durable tool approval', async () => {
+test('agent runner directly executes model-selected group management tools', async () => {
   const ai = await import('../../lib/server/ai.js');
-  const { runAgentTurn, resolveApproval } = await import('../../lib/server/agent/runner.js');
+  const { runAgentTurn } = await import('../../lib/server/agent/runner.js');
   const { agentRunStore } = await import('../../lib/server/agent/store/index.js');
   let banCalls = 0;
   const progressMessages: string[] = [];
@@ -63,7 +63,6 @@ test('agent runner persists run parts and supports durable tool approval', async
     ai_context_enabled: false,
     ai_memory_enabled: false,
     ai_group_context_enabled: false,
-    agent_tool_permissions: { qq_mute_member: 'ask' },
   };
 
   const previous = ai._overrideChat((async (_input: unknown, _history: unknown, _cfg: unknown, options: Record<string, any>) => {
@@ -78,10 +77,15 @@ test('agent runner persists run parts and supports durable tool approval', async
       input: { action: 'search', queries: ['测试查询'] },
       output: { source_count: 1 },
     }], { round: 1 });
-    const result = await options.executeFunctionCall('qq_mute_member', { target_user_id: 222, duration_seconds: 60 }, {
+    await options.executeFunctionCall('qq_mute_member', { target_user_id: 222, duration_seconds: 60 }, {
       round: 1,
       index: 1,
       executedToolCalls: 1,
+    });
+    const result = await options.executeFunctionCall('qq_mute_member', { target_user_id: 223, duration_seconds: 60 }, {
+      round: 1,
+      index: 2,
+      executedToolCalls: 2,
     });
     return result.message;
   }) as any);
@@ -95,13 +99,12 @@ test('agent runner persists run parts and supports durable tool approval', async
       requesterIsAdmin: true,
       onProgress: async (progress) => { progressMessages.push(progress.text); },
     });
-    assert.equal(turn.run.status, 'waiting_approval');
-    assert.equal(banCalls, 0);
+    assert.equal(turn.run.status, 'completed');
+    assert.equal(banCalls, 2);
     assert.deepEqual(progressMessages, ['我先核对目标成员。', '我再确认一下权限。']);
-    const approvals = agentRunStore.listApprovals('pending');
-    assert.equal(approvals.length, 1);
     const parts = agentRunStore.listParts(turn.run.id);
     assert.ok(parts.some((part) => part.type === 'tool_call'));
+    assert.equal(parts.filter((part) => part.type === 'tool_call' && part.tool_name === 'qq_mute_member').length, 2);
     assert.ok(parts.some((part) => (
       part.type === 'tool_call' && part.tool_name === 'web_search' && part.metadata.builtin === true
     )));
@@ -109,18 +112,6 @@ test('agent runner persists run parts and supports durable tool approval', async
       part.type === 'tool_result' && part.tool_name === 'web_search' && part.metadata.builtin === true
     )));
     assert.equal(parts.filter((part) => part.type === 'progress').length, 2);
-
-    const approved = await resolveApproval({
-      approvalId: approvals[0].id,
-      approve: true,
-      event: { ...event, raw_message: '确认执行' },
-      client,
-      cfg,
-    });
-    assert.equal(approved.ok, true);
-    assert.equal(banCalls, 1);
-    assert.equal(agentRunStore.getApproval(approvals[0].id)?.status, 'consumed');
-    assert.equal(agentRunStore.getRun(turn.run.id)?.status, 'completed');
   } finally {
     ai._restoreChat(previous);
   }

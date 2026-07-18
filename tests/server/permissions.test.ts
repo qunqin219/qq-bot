@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canManageRole, roleLabel, adminSet, isConfiguredAdmin, isGroupWithinConfiguredScope, shouldPersistIncomingMessage, isMutatingGroupManagementTool, hasExplicitManagementConfirmation } from '../../lib/server/bot/permissions.js';
+import { canManageRole, roleLabel, adminSet, isConfiguredAdmin, isGroupWithinConfiguredScope, shouldPersistIncomingMessage } from '../../lib/server/bot/permissions.js';
 
 test('canManageRole: owner 可管理 admin', () => {
   assert.equal(canManageRole('owner', 'admin'), true);
@@ -89,33 +89,5 @@ test('shouldPersistIncomingMessage: 非 admin 私聊不持久化', () => {
 
 test('shouldPersistIncomingMessage: 群消息持久化', () => {
   assert.equal(shouldPersistIncomingMessage({ user_id: 1, self_id: 100, group_id: 5 } as any, {} as any, false), true);
-});
-
-test('isMutatingGroupManagementTool: qq_mute_member 为变更类', () => {
-  assert.equal(isMutatingGroupManagementTool('qq_mute_member'), true);
-});
-
-test('isMutatingGroupManagementTool: qq_get_group_members 非变更类', () => {
-  assert.equal(isMutatingGroupManagementTool('qq_get_group_members'), false);
-});
-
-test('isMutatingGroupManagementTool: qq_read_image 非变更类', () => {
-  assert.equal(isMutatingGroupManagementTool('qq_read_image'), false);
-});
-
-test('hasExplicitManagementConfirmation: 确认禁言', () => {
-  assert.equal(hasExplicitManagementConfirmation('确认禁言'), true);
-});
-
-test('hasExplicitManagementConfirmation: 请禁言 不算确认', () => {
-  assert.equal(hasExplicitManagementConfirmation('请禁言'), false);
-});
-
-test('hasExplicitManagementConfirmation: 确认执行', () => {
-  assert.equal(hasExplicitManagementConfirmation('确认执行'), true);
-});
-
-test('hasExplicitManagementConfirmation: 确认全员禁言', () => {
-  assert.equal(hasExplicitManagementConfirmation('确认全员禁言'), true);
 });
 

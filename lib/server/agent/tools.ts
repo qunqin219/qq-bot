@@ -1,15 +1,18 @@
-import { randomUUID } from 'node:crypto';
 import type { AgentContext, AgentTool, ToolExecutionContext } from './types.js';
 import { INTERNAL_INLINE_PARTS_FIELD } from '../ai/types.js';
 import { buildGroupManagementFunctionDeclarations } from '../bot/tools/declarations.js';
 import { executeGroupManagementTool } from '../bot/tools/management.js';
-import { isMutatingGroupManagementTool } from '../bot/permissions.js';
-import { resolveToolPermission, hasInlineApproval } from './permission.js';
-import { agentRunStore } from './store/index.js';
-import { agentEventBus } from './events.js';
 import { executeWebFetch } from './web-fetch.js';
 
 const MEMORY_TOOLS = new Set(['create_memory', 'edit_memory', 'delete_memory']);
+const GROUP_MANAGEMENT_TOOLS = new Set([
+  'qq_set_group_whole_ban',
+  'qq_mute_all_manageable_members',
+  'qq_unmute_all_manageable_members',
+  'qq_mute_member',
+  'qq_unmute_member',
+  'qq_kick_member',
+]);
 const declarations = buildGroupManagementFunctionDeclarations({
   memoryEnabled: true,
   imageReadEnabled: true,
@@ -37,7 +40,7 @@ function available(name: string, context: Omit<AgentContext, 'runId' | 'sessionI
   if (MEMORY_TOOLS.has(name)) return context.cfg.ai_memory_enabled === true;
   if (name === 'qq_read_image') return Boolean(context.event.group_id && context.cfg.ai_group_context_enabled === true);
   if (name === 'qq_get_group_members') return Boolean(context.event.group_id && context.requesterIsAdmin);
-  if (isMutatingGroupManagementTool(name)) {
+  if (GROUP_MANAGEMENT_TOOLS.has(name)) {
     return Boolean(context.event.group_id && context.requesterIsAdmin && ['owner', 'admin'].includes(context.botRole));
   }
   return false;
@@ -45,14 +48,11 @@ function available(name: string, context: Omit<AgentContext, 'runId' | 'sessionI
 
 function createTool(name: string): AgentTool {
   const declaration = declarationFor(name);
-  const mutating = isMutatingGroupManagementTool(name);
   return {
     name,
     description: String(declaration.description || name),
     inputSchema: declaration.parameters || { type: 'object', properties: {} },
-    risk: mutating ? 'destructive' : (MEMORY_TOOLS.has(name) ? 'write' : 'read'),
     scopes: (MEMORY_TOOLS.has(name) || name === 'web_fetch') ? ['private', 'group'] : ['group'],
-    defaultPermission: mutating ? 'ask' : 'allow',
     isAvailable: (context) => available(name, context),
     execute: async (input, context) => {
       if (name === 'web_fetch') return executeWebFetch(input, context.signal);
@@ -62,7 +62,6 @@ function createTool(name: string): AgentTool {
         cfg: context.cfg,
         botRole: context.botRole,
         requesterIsAdmin: context.requesterIsAdmin,
-        permissionGranted: true,
       })) || { ok: false, message: `工具 ${name} 没有返回结果` };
     },
   };
@@ -154,30 +153,6 @@ export class ToolRegistry {
     if (context.signal.aborted) throw new Error('agent run cancelled');
     const tool = this.get(name);
     if (!tool || !tool.isAvailable(context)) return { ok: false, message: `工具不可用：${name}` };
-
-    const action = resolveToolPermission(context, tool);
-    if (action === 'deny') return { ok: false, denied: true, message: `当前策略禁止执行工具 ${name}` };
-
-    if (action === 'ask' && !hasInlineApproval(context)) {
-      const approval = agentRunStore.createApproval({
-        id: randomUUID(),
-        run_id: context.runId,
-        session_id: context.sessionId,
-        tool_name: name,
-        args,
-        requester_id: String(context.event.user_id || ''),
-        group_id: String(context.event.group_id || ''),
-        expires_at: new Date(Date.now() + Math.max(60_000, Number(context.cfg.agent_approval_ttl_ms || 10 * 60_000))).toISOString(),
-      });
-      agentRunStore.updateRun(context.runId, { status: 'waiting_approval', step: context.executedToolCalls });
-      agentEventBus.emit({ type: 'approval.requested', runId: context.runId, approval });
-      return {
-        ok: false,
-        approval_required: true,
-        approval_id: approval.id,
-        message: `该操作需要确认。请发送 /approve ${approval.id} 执行，或 /deny ${approval.id} 拒绝。审批 10 分钟内有效。`,
-      };
-    }
 
     const result = await executeWithTimeout(tool, args, context);
     if (context.signal.aborted) throw context.signal.reason || new Error('agent run cancelled');

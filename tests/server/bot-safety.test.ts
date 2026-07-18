@@ -64,7 +64,7 @@ test('ignored private and out-of-scope group messages are not persisted', async 
   assert.equal(stored[0].raw_message, 'allowed group context');
 });
 
-test('mutating group management tools require explicit confirmation', async () => {
+test('model-selected group management tools execute without a confirmation round trip', async () => {
   saveConfig({
     ...DEFAULT_CONFIG,
     admins: [111],
@@ -105,19 +105,10 @@ test('mutating group management tools require explicit confirmation', async () =
       user_id: 111,
       raw_message: '[CQ:at,qq=999] 禁言 [CQ:at,qq=222]',
     }), client as any);
-    assert.equal(banCalls, 0);
-    const firstToolResult = toolResult as Record<string, any>;
-    assert.equal(firstToolResult.ok, false);
-    assert.match(firstToolResult.message, /确认/);
-    assert.match(sent[0], /确认/);
-
-    await botCore.handleEvent(messageEvent({
-      user_id: 111,
-      raw_message: '[CQ:at,qq=999] 确认禁言 [CQ:at,qq=222]',
-    }), client as any);
     assert.equal(banCalls, 1);
-    const secondToolResult = toolResult as Record<string, any>;
-    assert.equal(secondToolResult.ok, true);
+    const result = toolResult as Record<string, any>;
+    assert.equal(result.ok, true);
+    assert.doesNotMatch(sent[0], /approve|确认/);
   } finally {
     ai._restoreChat(oldChat);
   }

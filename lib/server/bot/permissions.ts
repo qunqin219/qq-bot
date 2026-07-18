@@ -1,7 +1,5 @@
 import type { BotConfig, OneBotClient, OneBotEvent, Role } from './types.js';
 
-import * as ai from '../ai.js';
-
 function roleLabel(role: Role): string {
   if (role === 'owner') return '群主';
   if (role === 'admin') return '管理员';
@@ -38,22 +36,6 @@ function shouldPersistIncomingMessage(event: OneBotEvent, cfg: BotConfig, isAdmi
   return true;
 }
 
-function isMutatingGroupManagementTool(name: string): boolean {
-  return [
-    'qq_set_group_whole_ban',
-    'qq_mute_all_manageable_members',
-    'qq_unmute_all_manageable_members',
-    'qq_mute_member',
-    'qq_unmute_member',
-    'qq_kick_member',
-  ].includes(name);
-}
-
-function hasExplicitManagementConfirmation(raw: unknown): boolean {
-  const text = ai.stripCqCodes(raw).trim();
-  return /确认(执行|操作|禁言|解禁|解除禁言|踢出|移出|开启全员禁言|关闭全员禁言|全员禁言)/.test(text);
-}
-
 async function getMemberRole(
   client: OneBotClient,
   groupId: number | string | null | undefined,
@@ -71,7 +53,5 @@ export {
   isConfiguredAdmin,
   isGroupWithinConfiguredScope,
   shouldPersistIncomingMessage,
-  isMutatingGroupManagementTool,
-  hasExplicitManagementConfirmation,
   getMemberRole,
 };

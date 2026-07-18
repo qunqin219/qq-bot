@@ -58,7 +58,6 @@ export type GroupManagementContext = {
   cfg: BotConfig;
   botRole: Role;
   requesterIsAdmin: boolean;
-  permissionGranted?: boolean;
 };
 
 export type ManagementPromptContext = {

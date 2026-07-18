@@ -117,3 +117,22 @@ test('config API sanitizes secrets and preserves API key on empty update', async
   });
 });
 
+test('loading config removes legacy Agent approval settings', () => {
+  const configFile = process.env.QQ_BOT_CONFIG_FILE!;
+  fs.writeFileSync(configFile, JSON.stringify({
+    ...DEFAULT_CONFIG,
+    agent_approval_ttl_ms: 600_000,
+    agent_tool_permissions: {
+      qq_mute_member: 'ask',
+      qq_kick_member: 'deny',
+    },
+  }, null, 2));
+
+  const config = loadConfig();
+  assert.equal(Object.hasOwn(config, 'agent_approval_ttl_ms'), false);
+  assert.equal(Object.hasOwn(config, 'agent_tool_permissions'), false);
+
+  const persisted = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.equal(Object.hasOwn(persisted, 'agent_approval_ttl_ms'), false);
+  assert.equal(Object.hasOwn(persisted, 'agent_tool_permissions'), false);
+});

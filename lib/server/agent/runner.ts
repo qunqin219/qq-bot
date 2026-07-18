@@ -6,7 +6,7 @@ import * as ai from '../ai.js';
 import { buildAiRuntimePreview } from '../bot/context/preview.js';
 import { conversationStore } from '../store/index.js';
 import { getMemberRole } from '../bot/permissions.js';
-import { selectAgent, getAgent, assistant } from './agents.js';
+import { selectAgent } from './agents.js';
 import { qqToolRegistry } from './tools.js';
 import { agentRunStore } from './store/index.js';
 import { agentEventBus } from './events.js';
@@ -130,7 +130,6 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   };
   const functionDeclarations = qqToolRegistry.declarations(baseContext);
   let finalProviderTurn: Record<string, any> | null = null;
-  let destructiveToolRequested = false;
   let visibleProgressCount = 0;
   const visibleProgressTexts = new Set<string>();
 
@@ -212,13 +211,6 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
         agentEventBus.emit({ type: 'tool.requested', runId, part });
         agentEventBus.emit({ type: 'tool.started', runId, toolCallId: part.id, tool: name });
         try {
-          const selectedTool = qqToolRegistry.get(name);
-          if (selectedTool?.risk === 'destructive' && destructiveToolRequested) {
-            const denied = { ok: false, denied: true, message: '单次 Agent 运行最多执行或申请一个破坏性工具，请拆分操作' };
-            agentRunStore.completePart(part.id, 'denied', textForStore(denied));
-            return denied;
-          }
-          if (selectedTool?.risk === 'destructive') destructiveToolRequested = true;
           const result = await qqToolRegistry.execute(name, args, {
             ...baseContext,
             runId,
@@ -233,7 +225,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
             id: randomUUID(), run_id: runId, session_id: session.id, type: 'tool_result', status: 'completed',
             tool_name: name, content: textForStore(result), metadata: { tool_call_id: part.id },
           });
-          if (!result.approval_required) agentRunStore.updateRun(runId, { status: 'running', step: meta.executedToolCalls });
+          agentRunStore.updateRun(runId, { status: 'running', step: meta.executedToolCalls });
           agentEventBus.emit({ type: 'tool.completed', runId, toolCallId: part.id, tool: name, result });
           return result;
         } catch (error) {
@@ -244,18 +236,15 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
       },
     });
 
-    const waitingApproval = agentRunStore.listApprovals('pending').some((item) => item.run_id === runId);
     if (reply) {
       agentRunStore.addPart({ id: randomUUID(), run_id: runId, session_id: session.id, type: 'output', status: 'completed', tool_name: '', content: reply, metadata: {} });
     }
     run = agentRunStore.updateRun(runId, {
-      status: waitingApproval ? 'waiting_approval' : (reply ? 'completed' : 'failed'),
+      status: reply ? 'completed' : 'failed',
       output: reply || '',
-      error: reply || waitingApproval ? '' : 'model returned no reply',
+      error: reply ? '' : 'model returned no reply',
     }) || run;
-    if (waitingApproval) {
-      agentEventBus.emit({ type: 'run.status', runId, status: 'waiting_approval', step: run.step });
-    } else if (reply) {
+    if (reply) {
       agentEventBus.emit({ type: 'run.completed', runId, output: reply });
     } else {
       agentEventBus.emit({ type: 'run.failed', runId, error: run.error });
@@ -271,60 +260,5 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     throw error;
   } finally {
     finishRunController(runId);
-  }
-}
-
-export async function resolveApproval(input: {
-  approvalId: string;
-  approve: boolean;
-  event: OneBotEvent;
-  client: OneBotClient;
-  cfg: BotConfig;
-  trusted?: boolean;
-}): Promise<Record<string, unknown>> {
-  ensureRecovery();
-  const approval = agentRunStore.getApproval(input.approvalId);
-  if (!approval) return { ok: false, message: '没有找到这条审批请求' };
-  if (approval.status !== 'pending') return { ok: false, message: `审批已经是 ${approval.status} 状态` };
-  if (approval.expires_at <= new Date().toISOString()) {
-    agentRunStore.resolveApproval(approval.id, 'expired');
-    return { ok: false, message: '审批已经过期' };
-  }
-  if (!input.trusted && String(input.event.user_id || '') !== approval.requester_id) return { ok: false, message: '只有发起该操作的管理员可以审批' };
-  if (!input.trusted && String(input.event.group_id || '') !== approval.group_id) return { ok: false, message: '请在发起操作的原群中审批' };
-  if (!input.approve) {
-    agentRunStore.resolveApproval(approval.id, 'denied');
-    agentRunStore.updateRun(approval.run_id, { status: 'cancelled', error: 'tool approval denied' });
-    return { ok: true, message: `已拒绝执行 ${approval.tool_name}` };
-  }
-
-  const run = agentRunStore.getRun(approval.run_id);
-  const agent = getAgent(run?.agent || '') || assistant;
-  const botRole = input.event.group_id ? await getMemberRole(input.client, input.event.group_id, input.event.self_id) : 'none';
-  const tool = qqToolRegistry.get(approval.tool_name);
-  if (!tool) return { ok: false, message: `工具已经不存在：${approval.tool_name}` };
-  const signal = startRunController(approval.run_id, Number(input.cfg.agent_run_timeout_ms || 120_000));
-  try {
-    const result = await tool.execute(approval.args, {
-      event: input.event,
-      client: input.client,
-      cfg: input.cfg,
-      conversationKey: conversationStore.getConversationKey(input.event),
-      sessionId: approval.session_id,
-      runId: approval.run_id,
-      agent,
-      botRole,
-      requesterIsAdmin: true,
-      signal,
-      round: (run?.step || 0) + 1,
-      index: 1,
-      executedToolCalls: (run?.step || 0) + 1,
-    });
-    agentRunStore.resolveApproval(approval.id, 'consumed');
-    agentRunStore.addPart({ id: randomUUID(), run_id: approval.run_id, session_id: approval.session_id, type: 'tool_result', status: 'completed', tool_name: approval.tool_name, content: textForStore(result), metadata: { approval_id: approval.id } });
-    agentRunStore.updateRun(approval.run_id, { status: result.ok ? 'completed' : 'failed', output: String(result.message || ''), error: result.ok ? '' : String(result.message || 'tool failed') });
-    return result;
-  } finally {
-    finishRunController(approval.run_id);
   }
 }
