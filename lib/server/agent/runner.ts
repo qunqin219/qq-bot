@@ -46,12 +46,6 @@ let recovered = false;
 
 const MAX_VISIBLE_PROGRESS_MESSAGES = 2;
 const SILENT_PROGRESS_TOOLS = new Set(['create_memory', 'edit_memory', 'delete_memory']);
-const PROGRESS_SYSTEM_INSTRUCTION = [
-  '仅当本轮确实需要调用工具时，允许在工具调用前输出一句简短、自然的过程说明。',
-  '过程说明只说接下来要确认什么，不提前给结论，不展示思维链、工具名称、参数、原始结果或内部术语。',
-  '整个任务最多输出两次过程说明；工具全部完成后，再输出一条完整的最终回答。',
-  '这类简短过程说明属于允许发送给用户的正文，不属于内部推理或调试信息。',
-].join('\n');
 
 function ensureRecovery(): void {
   if (recovered) return;
@@ -179,11 +173,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   try {
     const reply = await ai.chat(runtime.aiInput, budgeted.history, cfg, {
       functionDeclarations,
-      extraSystemInstruction: [
-        runtime.extraSystemInstruction,
-        agent.systemPrompt,
-        input.onProgress ? PROGRESS_SYSTEM_INSTRUCTION : '',
-      ].filter(Boolean).join('\n\n'),
+      extraSystemInstruction: [runtime.extraSystemInstruction, agent.systemPrompt].filter(Boolean).join('\n\n'),
       autoAttachImages: !event.group_id || (runtime.groupInlineImageParts?.length || 0) === 0,
       extraParts: runtime.groupInlineImageParts || [],
       maxToolRounds: Math.max(1, Math.min(8, agent.maxSteps)),

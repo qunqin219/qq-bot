@@ -67,6 +67,7 @@ test('agent runner persists run parts and supports durable tool approval', async
   };
 
   const previous = ai._overrideChat((async (_input: unknown, _history: unknown, _cfg: unknown, options: Record<string, any>) => {
+    assert.doesNotMatch(options.extraSystemInstruction || '', /过程说明|工具全部完成后/);
     await options.onProgress({ round: 1, text: '我先核对目标成员。', source: 'model', toolNames: ['qq_get_group_members'] });
     await options.onProgress({ round: 2, text: '我再确认一下权限。', source: 'model', toolNames: ['qq_mute_member'] });
     await options.onProgress({ round: 3, text: '这条不应该发出。', source: 'model', toolNames: ['qq_mute_member'] });
