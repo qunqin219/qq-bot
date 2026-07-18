@@ -9,6 +9,7 @@ import { normalizeOpenAIStreamingResponse } from './stream.js';
 import {
   buildRequestBody,
   buildResponsesUrl,
+  normalizeReasoningEffort,
   resolveOpenAIApiKey,
   resolveOpenAIBaseUrl,
   resolveOpenAIModel,
@@ -62,7 +63,7 @@ function imageReaderPrompt(result: ToolResult, userMessage: unknown): string {
     '只分析下面这次工具返回的原始图片，不要参考、猜测或混入其他图片。',
     '准确描述图片的主体与关键信息；若图片含文字，尽可能转述所有能辨认的文字。',
     '看不清的局部请明确说明，不要虚构内容。只输出图片识别结果，不要调用工具或搜索。',
-    `主 Agent 当前需要回答的用户请求：${String(userMessage || '').trim() || '(未提供)'}`,
+    `主 Agent 当前需要回答的用户请求：${String(userMessage || '').trim().slice(0, 1000) || '(未提供)'}`,
   ].join('\n');
 }
 
@@ -90,7 +91,7 @@ async function prepareToolResults(
         ],
       }],
       ...(cfg.ai_thinking_enabled === true
-        ? { reasoning: { effort: cfg.ai_thinking_level || 'medium' } }
+        ? { reasoning: { effort: normalizeReasoningEffort(cfg.ai_thinking_level) } }
         : {}),
     };
 

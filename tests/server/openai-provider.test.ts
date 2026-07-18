@@ -70,7 +70,7 @@ test('OpenAI request builder supports the complete GPT-5.6 family and Responses 
   }
 });
 
-test('OpenAI tool loop preserves call_id and appends tool-provided images', async () => {
+test('OpenAI tool loop resolves tool images through a direct vision request before continuation', async () => {
   const oldFetch = global.fetch;
   const requests: Array<{ url: string; init: Record<string, any>; body: Record<string, any> }> = [];
   const progress: Array<Record<string, any>> = [];
