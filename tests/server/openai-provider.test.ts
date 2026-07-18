@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import * as ai from '../../lib/server/ai.js';
+import { limitToolResult } from '../../lib/server/agent/tools.js';
 
 declare const global: any;
 
@@ -74,6 +75,7 @@ test('OpenAI tool loop resolves tool images through a direct vision request befo
   const oldFetch = global.fetch;
   const requests: Array<{ url: string; init: Record<string, any>; body: Record<string, any> }> = [];
   const progress: Array<Record<string, any>> = [];
+  const imageData = 'a'.repeat(32_000);
   const responses = [
     {
       id: 'resp_tool',
@@ -135,13 +137,13 @@ test('OpenAI tool loop resolves tool images through a direct vision request befo
       executeFunctionCall: async (name, args) => {
         assert.equal(name, 'qq_read_image');
         assert.deepEqual(args, { message_id: 9001 });
-        return {
+        return limitToolResult({
           ok: true,
           message: '已读取图片',
           __ai_inline_parts: [
-            { inline_data: { mime_type: 'image/png', data: 'aW1hZ2U=' } },
+            { inline_data: { mime_type: 'image/png', data: imageData } },
           ],
-        };
+        }, 4_000);
       },
       onProgress: (update) => { progress.push(update); },
     });
@@ -163,7 +165,7 @@ test('OpenAI tool loop resolves tool images through a direct vision request befo
     assert.equal(imageReader.tools, undefined);
     assert.match(imageReader.input[0].content[0].text, /主 Agent 当前需要回答的用户请求：看看图片/);
     assert.equal(imageReader.input[0].content[1].type, 'input_image');
-    assert.equal(imageReader.input[0].content[1].image_url, 'data:image/png;base64,aW1hZ2U=');
+    assert.equal(imageReader.input[0].content[1].image_url, `data:image/png;base64,${imageData}`);
     assert.equal(imageReader.input[0].content[1].detail, 'original');
 
     const continuation = requests[2].body.input;

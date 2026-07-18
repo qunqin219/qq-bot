@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentContext, AgentTool, ToolExecutionContext } from './types.js';
+import { INTERNAL_INLINE_PARTS_FIELD } from '../ai/types.js';
 import { buildGroupManagementFunctionDeclarations } from '../bot/tools/declarations.js';
 import { executeGroupManagementTool } from '../bot/tools/management.js';
 import { isMutatingGroupManagementTool } from '../bot/permissions.js';
@@ -68,21 +69,36 @@ function createTool(name: string): AgentTool {
 }
 
 function limitToolResult(result: Record<string, unknown>, maxChars: number): Record<string, unknown> {
-  const text = JSON.stringify(result);
-  if (text.length <= maxChars) return result;
-  const compact: Record<string, unknown> = { ...result, truncated: true };
+  // 图片是 Provider 消费的内部二进制载荷，不是要展示给模型的普通工具文本。
+  // 必须先从长度限制流程中分离，否则大图片会让整份结果退化成 preview，
+  // 导致后续视觉请求只拿到一截 Base64 文本而不是原图。
+  const inlineParts = Array.isArray(result[INTERNAL_INLINE_PARTS_FIELD])
+    ? result[INTERNAL_INLINE_PARTS_FIELD]
+    : null;
+  const publicResult: Record<string, unknown> = { ...result };
+  delete publicResult[INTERNAL_INLINE_PARTS_FIELD];
+
+  const attachInlineParts = (value: Record<string, unknown>): Record<string, unknown> => (
+    inlineParts
+      ? { ...value, [INTERNAL_INLINE_PARTS_FIELD]: inlineParts }
+      : value
+  );
+
+  const text = JSON.stringify(publicResult);
+  if (text.length <= maxChars) return attachInlineParts(publicResult);
+  const compact: Record<string, unknown> = { ...publicResult, truncated: true };
   for (const [key, value] of Object.entries(compact)) {
     if (Array.isArray(value) && value.length > 50) compact[key] = value.slice(0, 50);
     if (typeof value === 'string' && value.length > 4000) compact[key] = `${value.slice(0, 4000)}…`;
   }
   const compactText = JSON.stringify(compact);
-  if (compactText.length <= maxChars) return compact;
-  return {
+  if (compactText.length <= maxChars) return attachInlineParts(compact);
+  return attachInlineParts({
     ok: result.ok === true,
     truncated: true,
     message: String(result.message || '工具结果过长，已截断'),
     preview: compactText.slice(0, maxChars),
-  };
+  });
 }
 
 async function executeWithTimeout(
@@ -171,3 +187,5 @@ export class ToolRegistry {
 
 export const qqToolRegistry = new ToolRegistry();
 for (const declaration of declarations) qqToolRegistry.register(createTool(String(declaration.name)));
+
+export { limitToolResult };

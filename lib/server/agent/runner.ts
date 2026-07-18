@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { BotConfig, OneBotClient, OneBotEvent } from '../bot/types.js';
-import type { ToolProgressUpdate } from '../ai/types.js';
+import { INTERNAL_INLINE_PARTS_FIELD, type ToolProgressUpdate } from '../ai/types.js';
 import type { AgentContext, AgentPartRecord, AgentProgressUpdate, AgentRunRecord } from './types.js';
 import * as ai from '../ai.js';
 import { buildAiRuntimePreview } from '../bot/context/preview.js';
@@ -56,9 +56,9 @@ function ensureRecovery(): void {
 
 function persistable(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object') return { value: String(value ?? '') };
-  const clone = structuredClone(value) as Record<string, unknown>;
-  delete clone.__ai_inline_parts;
-  return clone;
+  const safeValue = { ...(value as Record<string, unknown>) };
+  delete safeValue[INTERNAL_INLINE_PARTS_FIELD];
+  return structuredClone(safeValue);
 }
 
 function textForStore(value: unknown, max = 12_000): string {

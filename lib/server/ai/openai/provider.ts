@@ -96,7 +96,13 @@ async function prepareToolResults(
     };
 
     try {
-      console.log(`[ToolAudit] openai_image_reader_start name=${result.name} images=${images.length}`);
+      const encodedChars = images.reduce((total, image) => (
+        total + (image.type === 'input_image' ? image.image_url.length : 0)
+      ), 0);
+      console.log(
+        `[ToolAudit] openai_image_reader_start name=${result.name} images=${images.length} ` +
+        `encoded_chars=${encodedChars}`
+      );
       const response = await sendOpenAIRequest(body, cfg, { signal: options.signal });
       if (!response.ok) {
         const error = await response.text().catch(() => '');
