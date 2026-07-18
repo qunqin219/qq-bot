@@ -101,7 +101,7 @@ export const api = {
 
   // AI 上下文会话
   getConversations: (): Promise<ConversationsResponse> => get('/conversations'),
-  clearConversation: (key: string): Promise<ApiResult> =>
+  deleteConversation: (key: string): Promise<ApiResult> =>
     del(`/conversations/${encodeURIComponent(key)}`),
   clearAllConversations: (): Promise<ApiResult> => del('/conversations'),
 

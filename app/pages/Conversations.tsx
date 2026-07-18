@@ -43,12 +43,12 @@ export default function Conversations() {
   const [items, setItems] = useState<ConversationSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [clearingKey, setClearingKey] = useState<string | null>(null)
+  const [deletingKey, setDeletingKey] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
-  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [confirmAllOpen, setConfirmAllOpen] = useState(false)
   const [confirmAllStep2, setConfirmAllStep2] = useState(false)
-  const [pendingClearKey, setPendingClearKey] = useState<string | null>(null)
+  const [deleteTargetKey, setDeleteTargetKey] = useState<string | null>(null)
   const { success, error: toastError, ToastEl } = useToast()
 
   const fetchData = async () => {
@@ -68,17 +68,18 @@ export default function Conversations() {
     fetchData()
   }, [])
 
-  const handleClearOne = async (key: string) => {
-    setClearingKey(key)
+  const handleDeleteOne = async (key: string) => {
+    setDeletingKey(key)
     try {
-      await api.clearConversation(key)
-      success('会话上下文已清空')
+      await api.deleteConversation(key)
+      success('会话已删除')
       await fetchData()
     } catch (e) {
       toastError(e instanceof Error ? e.message : String(e))
     } finally {
-      setClearingKey(null)
-      setConfirmOpen(false)
+      setDeletingKey(null)
+      setDeleteOpen(false)
+      setDeleteTargetKey(null)
     }
   }
 
@@ -216,11 +217,11 @@ export default function Conversations() {
                       </TableCell>
                       <TableCell className="text-right">
                         <AlertDialog
-                          open={pendingClearKey === item.key && confirmOpen}
+                          open={deleteTargetKey === item.key && deleteOpen}
                           onOpenChange={(open) => {
                             if (!open) {
-                              setConfirmOpen(false)
-                              setPendingClearKey(null)
+                              setDeleteOpen(false)
+                              setDeleteTargetKey(null)
                             }
                           }}
                         >
@@ -230,37 +231,37 @@ export default function Conversations() {
                               size="xs"
                               className="text-destructive hover:bg-destructive/10"
                               onClick={() => {
-                                setPendingClearKey(item.key)
-                                setConfirmOpen(true)
+                                setDeleteTargetKey(item.key)
+                                setDeleteOpen(true)
                               }}
-                              disabled={clearingKey === item.key}
+                              disabled={deletingKey === item.key}
                             >
                               <Trash2Icon className="h-3.5 w-3.5" />
-                              {clearingKey === item.key ? '...' : '清空'}
+                              {deletingKey === item.key ? '删除中...' : '删除'}
                             </Button>
                           </AlertDialogTrigger>
                           <AlertDialogContent>
                             <AlertDialogHeader>
-                              <AlertDialogTitle>确认清空</AlertDialogTitle>
+                              <AlertDialogTitle>确认删除会话</AlertDialogTitle>
                               <AlertDialogDescription>
-                                确定清空「{getKeyLabel(item.key)}」的上下文吗？
+                                确定删除「{getKeyLabel(item.key)}」及其全部上下文历史吗？此操作不可恢复。
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
                               <AlertDialogCancel
                                 onClick={() => {
-                                  setConfirmOpen(false)
-                                  setPendingClearKey(null)
+                                  setDeleteOpen(false)
+                                  setDeleteTargetKey(null)
                                 }}
                               >
                                 取消
                               </AlertDialogCancel>
                               <AlertDialogAction
                                 variant="destructive"
-                                onClick={() => handleClearOne(item.key)}
-                                disabled={clearingKey === item.key}
+                                onClick={() => handleDeleteOne(item.key)}
+                                disabled={deletingKey === item.key}
                               >
-                                {clearingKey === item.key ? '清空中...' : '确认清空'}
+                                {deletingKey === item.key ? '删除中...' : '确认删除'}
                               </AlertDialogAction>
                             </AlertDialogFooter>
                           </AlertDialogContent>
