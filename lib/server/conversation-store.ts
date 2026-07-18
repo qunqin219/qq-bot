@@ -18,6 +18,7 @@ type ConversationMessage = {
   user_name?: string | null;
   speaker_name?: string | null;
   gemini_content?: GeminiContent | null;
+  tool_executions?: Array<Record<string, unknown>>;
 };
 
 type ConversationEntry = {
@@ -32,6 +33,7 @@ type TurnMeta = {
   user_name?: string | null;
   user_gemini_content?: unknown;
   model_gemini_content?: unknown;
+  model_tool_executions?: unknown;
 };
 
 type GeminiContent = {
@@ -83,12 +85,16 @@ function getHistory(key: string, limit: unknown = 20) {
   return messages
     .slice(-safeLimit)
     .filter((m) => m && (m.role === 'user' || m.role === 'model') && typeof m.text === 'string')
-    .map((m) => ({
-      role: m.role,
-      text: m.text,
-      time: m.time,
-      ...(isGeminiContent(m.gemini_content) ? { gemini_content: m.gemini_content } : {}),
-    }));
+    .map((m) => {
+      const toolExecutions = normalizeToolExecutions(m.tool_executions);
+      return {
+        role: m.role,
+        text: m.text,
+        time: m.time,
+        ...(isGeminiContent(m.gemini_content) ? { gemini_content: m.gemini_content } : {}),
+        ...(toolExecutions.length ? { tool_executions: toolExecutions } : {}),
+      };
+    });
 }
 
 function cloneJson<T>(value: T): T | null {
@@ -114,6 +120,15 @@ function normalizeGeminiContent(value: unknown, role: ConversationRole): GeminiC
   if (!isGeminiContent(value) || value.role !== role) return null;
   const cloned = cloneJson(value);
   return isGeminiContent(cloned) ? cloned : null;
+}
+
+function normalizeToolExecutions(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    .slice(-20)
+    .map((item) => cloneJson(item as Record<string, unknown>))
+    .filter((item): item is Record<string, unknown> => Boolean(item));
 }
 
 function stripLegacyUserPrefix(text: unknown): { speaker_name: string | null; text: string } {
@@ -178,8 +193,10 @@ function appendTurn(
   if (meta.user_name) userEntry.user_name = meta.user_name;
   const userGeminiContent = normalizeGeminiContent(meta.user_gemini_content, 'user');
   const modelGeminiContent = normalizeGeminiContent(meta.model_gemini_content, 'model');
+  const modelToolExecutions = normalizeToolExecutions(meta.model_tool_executions);
   if (userGeminiContent) userEntry.gemini_content = userGeminiContent;
   if (modelGeminiContent) modelEntry.gemini_content = modelGeminiContent;
+  if (modelToolExecutions.length) modelEntry.tool_executions = modelToolExecutions;
   messages.push(userEntry);
   messages.push(modelEntry);
 

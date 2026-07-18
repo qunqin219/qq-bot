@@ -39,9 +39,11 @@ test('agent runner directly executes model-selected group management tools', asy
       status: 'ok',
       data: { user_id: userId, role: userId === 999 ? 'admin' : 'member' },
     }),
-    setGroupBan: async () => {
+    setGroupBan: async (_groupId: number | string, targetUserId: number | string) => {
       banCalls += 1;
-      return { status: 'ok' };
+      return Number(targetUserId) === 223
+        ? { status: 'failed', wording: 'mock denied' }
+        : { status: 'ok' };
     },
   };
   const event = {
@@ -101,6 +103,24 @@ test('agent runner directly executes model-selected group management tools', asy
     });
     assert.equal(turn.run.status, 'completed');
     assert.equal(banCalls, 2);
+    assert.equal(turn.toolExecutions.length, 2);
+    assert.deepEqual(turn.toolExecutions[0], {
+      tool_name: 'qq_mute_member',
+      status: 'completed',
+      arguments: { target_user_id: 222, duration_seconds: 60 },
+      result: {
+        ok: true,
+        action: 'mute',
+        target_user_id: 222,
+        duration_seconds: 60,
+        message: '已禁言 222 60 秒',
+      },
+      round: 1,
+      index: 1,
+    });
+    assert.equal(turn.toolExecutions[1].status, 'failed');
+    assert.equal(turn.toolExecutions[1].result.ok, false);
+    assert.match(String(turn.toolExecutions[1].result.message), /mock denied/);
     assert.deepEqual(progressMessages, ['我先核对目标成员。', '我再确认一下权限。']);
     const parts = agentRunStore.listParts(turn.run.id);
     assert.ok(parts.some((part) => part.type === 'tool_call'));

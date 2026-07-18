@@ -77,9 +77,11 @@ async function handleAiTurn(
       user_name: String(getEventSenderName(event)),
       user_gemini_content: historyUserContent,
       model_gemini_content: providerTurn?.modelContent,
+      model_tool_executions: result.toolExecutions,
     } : {
       user_gemini_content: historyUserContent,
       model_gemini_content: providerTurn?.modelContent,
+      model_tool_executions: result.toolExecutions,
     }
   );
 

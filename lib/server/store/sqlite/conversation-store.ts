@@ -19,6 +19,7 @@ type ConversationMessage = {
   user_name?: string | null;
   speaker_name?: string | null;
   gemini_content?: GeminiContent | null;
+  tool_executions?: Array<Record<string, unknown>>;
 };
 
 type TurnMeta = {
@@ -26,6 +27,7 @@ type TurnMeta = {
   user_name?: string | null;
   user_gemini_content?: unknown;
   model_gemini_content?: unknown;
+  model_tool_executions?: unknown;
 };
 
 type GeminiContent = {
@@ -58,6 +60,15 @@ function normalizeGeminiContent(value: unknown, role: ConversationRole): GeminiC
   if (!isGeminiContent(value) || value.role !== role) return null;
   const cloned = cloneJson(value);
   return isGeminiContent(cloned) ? cloned : null;
+}
+
+function normalizeToolExecutions(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    .slice(-20)
+    .map((item) => cloneJson(item as Record<string, unknown>))
+    .filter((item): item is Record<string, unknown> => Boolean(item));
 }
 
 function stripLegacyUserPrefix(text: unknown): { speaker_name: string | null; text: string } {
@@ -102,7 +113,7 @@ function getConversationKey(event: ConversationEvent): string {
 function getHistory(key: string, limit: unknown = 20): ConversationMessage[] {
   if (!key) return [];
   const rows = stmt(
-    'SELECT role, text, time, user_id, user_name, gemini_content FROM conversation_turns WHERE conversation_key = ? ORDER BY id ASC'
+    'SELECT role, text, time, user_id, user_name, gemini_content, tool_executions FROM conversation_turns WHERE conversation_key = ? ORDER BY id ASC'
   ).all(key) as Array<{
     role: string;
     text: string | null;
@@ -110,6 +121,7 @@ function getHistory(key: string, limit: unknown = 20): ConversationMessage[] {
     user_id: string | null;
     user_name: string | null;
     gemini_content: string | null;
+    tool_executions: string | null;
   }>;
 
   const messages: ConversationMessage[] = rows.map((row) => {
@@ -121,6 +133,14 @@ function getHistory(key: string, limit: unknown = 20): ConversationMessage[] {
         parsed = null;
       }
     }
+    let parsedToolExecutions: unknown = null;
+    if (row.tool_executions) {
+      try {
+        parsedToolExecutions = JSON.parse(row.tool_executions);
+      } catch {
+        parsedToolExecutions = null;
+      }
+    }
     return {
       role: row.role,
       text: row.text ?? undefined,
@@ -128,6 +148,7 @@ function getHistory(key: string, limit: unknown = 20): ConversationMessage[] {
       user_id: row.user_id,
       user_name: row.user_name,
       gemini_content: parsed as GeminiContent | null,
+      tool_executions: normalizeToolExecutions(parsedToolExecutions),
     };
   });
 
@@ -135,12 +156,16 @@ function getHistory(key: string, limit: unknown = 20): ConversationMessage[] {
   return messages
     .slice(-safeLimit)
     .filter((m) => m && (m.role === 'user' || m.role === 'model') && typeof m.text === 'string')
-    .map((m) => ({
-      role: m.role,
-      text: m.text,
-      time: m.time,
-      ...(isGeminiContent(m.gemini_content) ? { gemini_content: m.gemini_content } : {}),
-    })) as ConversationMessage[];
+    .map((m) => {
+      const toolExecutions = normalizeToolExecutions(m.tool_executions);
+      return {
+        role: m.role,
+        text: m.text,
+        time: m.time,
+        ...(isGeminiContent(m.gemini_content) ? { gemini_content: m.gemini_content } : {}),
+        ...(toolExecutions.length ? { tool_executions: toolExecutions } : {}),
+      };
+    }) as ConversationMessage[];
 }
 
 /**
@@ -197,11 +222,12 @@ function appendTurn(
   const now = new Date().toISOString();
   const userGeminiContent = normalizeGeminiContent(meta.user_gemini_content, 'user');
   const modelGeminiContent = normalizeGeminiContent(meta.model_gemini_content, 'model');
+  const modelToolExecutions = normalizeToolExecutions(meta.model_tool_executions);
   const turns = Math.max(1, Number(maxTurns) || 20);
   const keep = turns * 2;
 
   const insertStmt = stmt(
-    'INSERT INTO conversation_turns (conversation_key, role, text, time, user_id, user_name, gemini_content) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO conversation_turns (conversation_key, role, text, time, user_id, user_name, gemini_content, tool_executions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const trimStmt = stmt(
     'DELETE FROM conversation_turns WHERE conversation_key = ? AND id NOT IN (SELECT id FROM conversation_turns WHERE conversation_key = ? ORDER BY id DESC LIMIT ?)'
@@ -216,9 +242,19 @@ function appendTurn(
       now,
       meta.user_id ? String(meta.user_id) : null,
       meta.user_name ? String(meta.user_name) : null,
-      userGeminiContent ? JSON.stringify(userGeminiContent) : null
+      userGeminiContent ? JSON.stringify(userGeminiContent) : null,
+      null
     );
-    insertStmt.run(key, 'model', String(assistantText), now, null, null, modelGeminiContent ? JSON.stringify(modelGeminiContent) : null);
+    insertStmt.run(
+      key,
+      'model',
+      String(assistantText),
+      now,
+      null,
+      null,
+      modelGeminiContent ? JSON.stringify(modelGeminiContent) : null,
+      modelToolExecutions.length ? JSON.stringify(modelToolExecutions) : null
+    );
     trimStmt.run(key, key, keep);
   });
   try {

@@ -68,7 +68,8 @@ function runMigrations(db: Database): void {
       time TEXT,
       user_id TEXT,
       user_name TEXT,
-      gemini_content TEXT
+      gemini_content TEXT,
+      tool_executions TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_conv_key ON conversation_turns(conversation_key);
 
@@ -125,6 +126,11 @@ function runMigrations(db: Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_parts_run ON agent_parts(run_id, created_at ASC);
   `);
+
+  const conversationColumns = db.pragma('table_info(conversation_turns)') as Array<{ name: string }>;
+  if (!conversationColumns.some((column) => column.name === 'tool_executions')) {
+    db.exec('ALTER TABLE conversation_turns ADD COLUMN tool_executions TEXT');
+  }
 }
 
 function closeDb(): void {

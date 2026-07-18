@@ -70,12 +70,15 @@ test('model-selected group management tools execute without a confirmation round
     admins: [111],
     ai_enabled: true,
     ai_api_key: 'test-key',
-    ai_group_context_enabled: false,
+    ai_context_enabled: true,
+    ai_group_context_enabled: true,
     ai_memory_enabled: false,
   });
 
   let toolResult: ToolResult = {};
   let banCalls = 0;
+  let chatCalls = 0;
+  let followupInput = '';
   const sent: string[] = [];
   const client = {
     getGroupMemberInfo: async (_groupId: number, userId: number) => ({
@@ -93,6 +96,11 @@ test('model-selected group management tools execute without a confirmation round
   };
 
   const oldChat = ai._overrideChat((async (_input: string, _history: any[], _cfg: Record<string, any>, options: Record<string, any>) => {
+    chatCalls += 1;
+    if (chatCalls > 1) {
+      followupInput = _input;
+      return '知道，刚才禁言的是 222。';
+    }
     toolResult = await options.executeFunctionCall('qq_mute_member', {
       target_user_id: 222,
       duration_seconds: 600,
@@ -109,6 +117,15 @@ test('model-selected group management tools execute without a confirmation round
     const result = toolResult as Record<string, any>;
     assert.equal(result.ok, true);
     assert.doesNotMatch(sent[0], /approve|确认/);
+
+    await botCore.handleEvent(messageEvent({
+      user_id: 111,
+      raw_message: '[CQ:at,qq=999] 你想不想给他解开',
+    }), client as any);
+    assert.match(followupInput, /"tool_name":"qq_mute_member"/);
+    assert.match(followupInput, /"target_user_id":222/);
+    assert.match(followupInput, /"status":"completed"/);
+    assert.match(followupInput, /"ok":true/);
   } finally {
     ai._restoreChat(oldChat);
   }

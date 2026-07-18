@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import type { BotConfig, OneBotClient, OneBotEvent } from '../bot/types.js';
 import { INTERNAL_INLINE_PARTS_FIELD, type ToolProgressUpdate } from '../ai/types.js';
-import type { AgentContext, AgentPartRecord, AgentProgressUpdate, AgentRunRecord } from './types.js';
+import type {
+  AgentContext,
+  AgentPartRecord,
+  AgentProgressUpdate,
+  AgentRunRecord,
+  AgentToolExecution,
+} from './types.js';
 import * as ai from '../ai.js';
 import { buildAiRuntimePreview } from '../bot/context/preview.js';
 import { conversationStore } from '../store/index.js';
 import { getMemberRole } from '../bot/permissions.js';
 import { selectAgent } from './agents.js';
-import { qqToolRegistry } from './tools.js';
+import { isStateChangingGroupManagementTool, qqToolRegistry } from './tools.js';
 import { agentRunStore } from './store/index.js';
 import { agentEventBus } from './events.js';
 import { applyContextBudget } from './context/budget.js';
@@ -40,6 +46,7 @@ export type AgentTurnResult = {
   conversationKey: string;
   contextTurns: number;
   finalProviderTurn: Record<string, any> | null;
+  toolExecutions: AgentToolExecution[];
 };
 
 let recovered = false;
@@ -130,6 +137,7 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   };
   const functionDeclarations = qqToolRegistry.declarations(baseContext);
   let finalProviderTurn: Record<string, any> | null = null;
+  const toolExecutions: AgentToolExecution[] = [];
   let visibleProgressCount = 0;
   const visibleProgressTexts = new Set<string>();
 
@@ -220,17 +228,39 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
             index: meta.index,
             executedToolCalls: meta.executedToolCalls,
           });
-          agentRunStore.completePart(part.id, 'completed', textForStore(result), { result: persistable(result) });
+          const outcomeStatus = result.ok === false ? 'failed' : 'completed';
+          const persistedResult = persistable(result);
+          agentRunStore.completePart(part.id, outcomeStatus, textForStore(result), { result: persistedResult });
           agentRunStore.addPart({
-            id: randomUUID(), run_id: runId, session_id: session.id, type: 'tool_result', status: 'completed',
+            id: randomUUID(), run_id: runId, session_id: session.id, type: 'tool_result', status: outcomeStatus,
             tool_name: name, content: textForStore(result), metadata: { tool_call_id: part.id },
           });
+          if (isStateChangingGroupManagementTool(name)) {
+            toolExecutions.push({
+              tool_name: name,
+              status: outcomeStatus,
+              arguments: persistable(args),
+              result: persistedResult,
+              round: meta.round,
+              index: meta.index,
+            });
+          }
           agentRunStore.updateRun(runId, { status: 'running', step: meta.executedToolCalls });
           agentEventBus.emit({ type: 'tool.completed', runId, toolCallId: part.id, tool: name, result });
           return result;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           agentRunStore.completePart(part.id, 'failed', message);
+          if (isStateChangingGroupManagementTool(name)) {
+            toolExecutions.push({
+              tool_name: name,
+              status: 'failed',
+              arguments: persistable(args),
+              result: { ok: false, message },
+              round: meta.round,
+              index: meta.index,
+            });
+          }
           throw error;
         }
       },
@@ -249,7 +279,16 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
     } else {
       agentEventBus.emit({ type: 'run.failed', runId, error: run.error });
     }
-    return { reply, run, sessionId: session.id, agent: agent.name, conversationKey, contextTurns: runtime.contextTurns || 10, finalProviderTurn };
+    return {
+      reply,
+      run,
+      sessionId: session.id,
+      agent: agent.name,
+      conversationKey,
+      contextTurns: runtime.contextTurns || 10,
+      finalProviderTurn,
+      toolExecutions,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const cancelled = signal.aborted;

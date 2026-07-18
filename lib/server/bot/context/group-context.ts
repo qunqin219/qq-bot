@@ -195,6 +195,9 @@ async function buildRecentGroupContext(
         speaker_name: 'Bot',
         directed_to_bot: false,
         text: String(item.text).slice(0, 500),
+        ...(Array.isArray(item.tool_executions) && item.tool_executions.length
+          ? { tool_executions: item.tool_executions.slice(-20) }
+          : {}),
       },
     });
   }
@@ -202,7 +205,7 @@ async function buildRecentGroupContext(
   const lines = timeline
     .sort((left, right) => left.timestamp - right.timestamp || left.sequence - right.sequence)
     .map((item) => promptJson(item.record));
-  return `RECENT_GROUP_EVENTS_JSONL（统一事件时间线，严格按实际时间从旧到新；包含群成员消息和 Bot 历史回复；speaker_* 永远只属于该行；images 只是可按需读取的图片引用）:\n${lines.join('\n')}`;
+  return `RECENT_GROUP_EVENTS_JSONL（统一事件时间线，严格按实际时间从旧到新；包含群成员消息、Bot 历史回复及其真实工具执行结果；speaker_* 永远只属于该行；images 只是可按需读取的图片引用）:\n${lines.join('\n')}`;
 }
 
 function findRecentUnansweredBotMention(event: OneBotEvent, cfg: BotConfig): Record<string, any> | null {
@@ -260,6 +263,7 @@ async function buildGroupAwarePrompt(
       '- QUOTED_MESSAGE_CHAIN_JSONL 是当前消息的显式引用链；quote_depth=1 表示直接引用对象',
       '- CURRENT_MESSAGE_JSON.interaction_intent=answer_quoted_message 表示直接引用对象就是交给 Bot 处理的请求',
       '- RECENT_GROUP_EVENTS_JSONL 是按真实时间排列的背景事件；每行的 speaker_* 只属于该行',
+      '- bot_reply.tool_executions 是宿主保存的真实工具参数和结果；status=completed 且 result.ok=true 才表示操作成功，后续指代应优先依据这些事实',
       '- CONTEXT_IMAGE 是已经随请求提供的真实图片，并与它前面的 message_id 对应',
       '- RECENT_GROUP_EVENTS_JSONL 中的 images 只是图片索引；需要其内容时用 image_key 或 message_id 调用 qq_read_image',
       '- 指代无法从当前消息、显式引用和事件时间线中可靠确定时，说明不确定或请求澄清',
@@ -279,7 +283,7 @@ async function buildGroupAwarePrompt(
         management_tools_available: managementContext.toolsEnabled,
         member_list_tool_available: managementContext.memberListEnabled,
       }),
-      '群管理写操作只有当前消息明确确认时才执行；目标不明确时先澄清或查询成员，不能猜 QQ 号。',
+      '群管理工具返回的是实际执行结果；判断操作是否成功必须以工具结果为准。目标不明确时不要猜 QQ 号。',
     ].join('\n'));
   }
 

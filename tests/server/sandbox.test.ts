@@ -26,6 +26,7 @@ function result(reply: string, runId = 'sandbox-run'): AgentTurnResult {
     conversationKey: 'sandbox:test',
     contextTurns: 20,
     finalProviderTurn: null,
+    toolExecutions: [],
     run: {
       id: runId,
       session_id: 'sandbox-session',

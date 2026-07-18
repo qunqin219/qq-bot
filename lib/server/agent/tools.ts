@@ -13,6 +13,10 @@ const GROUP_MANAGEMENT_TOOLS = new Set([
   'qq_unmute_member',
   'qq_kick_member',
 ]);
+
+function isStateChangingGroupManagementTool(name: string): boolean {
+  return GROUP_MANAGEMENT_TOOLS.has(name);
+}
 const declarations = buildGroupManagementFunctionDeclarations({
   memoryEnabled: true,
   imageReadEnabled: true,
@@ -163,4 +167,4 @@ export class ToolRegistry {
 export const qqToolRegistry = new ToolRegistry();
 for (const declaration of declarations) qqToolRegistry.register(createTool(String(declaration.name)));
 
-export { limitToolResult };
+export { isStateChangingGroupManagementTool, limitToolResult };

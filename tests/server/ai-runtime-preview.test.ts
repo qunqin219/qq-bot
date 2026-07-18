@@ -148,7 +148,8 @@ test('group management context is injected only for a related request', async ()
   });
   assert.match(management.aiInput, /GROUP_MANAGEMENT_CONTEXT_JSON/);
   assert.match(management.aiInput, /"requester_is_configured_admin":true/);
-  assert.match(management.aiInput, /群管理写操作只有当前消息明确确认时才执行/);
+  assert.match(management.aiInput, /判断操作是否成功必须以工具结果为准/);
+  assert.doesNotMatch(management.aiInput, /明确确认时才执行/);
 });
 
 test('group runtime merges bot replies and ambient messages into one chronological event timeline', async () => {

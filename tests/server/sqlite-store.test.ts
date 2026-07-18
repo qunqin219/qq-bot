@@ -139,6 +139,31 @@ test('conversationStore: appendTurn + getHistory returns turns', () => {
   assert.equal(history[1].text, '你好呀');
 });
 
+test('conversationStore persists structured tool executions on model turns', () => {
+  clearAll();
+  const key = 'group:1004';
+  assert.equal(conversationStore.appendTurn(key, '禁言他', '已经处理', 20, {
+    model_tool_executions: [{
+      tool_name: 'qq_mute_member',
+      status: 'completed',
+      arguments: { target_user_id: 222, duration_seconds: 300 },
+      result: { ok: true, action: 'mute', target_user_id: 222, duration_seconds: 300 },
+      round: 1,
+      index: 1,
+    }],
+  }), true);
+
+  const history = conversationStore.getHistory(key, 20);
+  assert.deepEqual(history[1].tool_executions, [{
+    tool_name: 'qq_mute_member',
+    status: 'completed',
+    arguments: { target_user_id: 222, duration_seconds: 300 },
+    result: { ok: true, action: 'mute', target_user_id: 222, duration_seconds: 300 },
+    round: 1,
+    index: 1,
+  }]);
+});
+
 test('conversationStore: appendTurn trims to maxTurns', () => {
   clearAll();
   const key = 'group:1002';

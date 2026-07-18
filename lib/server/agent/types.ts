@@ -103,6 +103,15 @@ export type AgentProgressUpdate = {
   toolNames: string[];
 };
 
+export type AgentToolExecution = {
+  tool_name: string;
+  status: 'completed' | 'failed';
+  arguments: Record<string, unknown>;
+  result: Record<string, unknown>;
+  round: number;
+  index: number;
+};
+
 export type AgentEvent =
   | { type: 'run.started'; run: AgentRunRecord }
   | { type: 'run.status'; runId: string; status: AgentRunStatus; step: number }

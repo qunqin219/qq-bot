@@ -67,6 +67,7 @@ export interface ConversationMessage {
   user_name?: string | null;
   speaker_name?: string | null;
   gemini_content?: unknown;
+  tool_executions?: Array<Record<string, unknown>>;
 }
 
 export interface TurnMeta {
@@ -74,6 +75,7 @@ export interface TurnMeta {
   user_name?: string | null;
   user_gemini_content?: unknown;
   model_gemini_content?: unknown;
+  model_tool_executions?: unknown;
 }
 
 export interface IConversationStore {
