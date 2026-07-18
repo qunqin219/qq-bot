@@ -106,6 +106,8 @@ test('runtime preview attaches current group image with the text context', async
     assert.doesNotMatch(preview.aiInput, /\[CQ:image/);
     assert.match(preview.extraSystemInstruction, /## Memories/);
     assert.match(preview.extraSystemInstruction, /## Memory Tool/);
+    assert.doesNotMatch(preview.aiInput, /GROUP_MANAGEMENT_CONTEXT_JSON/);
+    assert.doesNotMatch(preview.aiInput, /普通闲聊、接话|需要外部事实|长度只由当前这句话/);
 
     const tools = preview.requestBody.tools || [];
     assert.ok(tools.some((tool: Record<string, any>) => Array.isArray(tool.functionDeclarations)), 'function tools should be present');
@@ -129,6 +131,24 @@ test('runtime preview attaches current group image with the text context', async
     assert.ok(last.parts.some((part: Record<string, any>) => /CONTEXT_IMAGE/.test(String(part.text || ''))));
     assert.ok(last.parts.some((part: Record<string, any>) => part.inline_data?.mime_type === 'image/png'));
   });
+});
+
+test('group management context is injected only for a related request', async () => {
+  const ordinary = await botCore.buildAiRuntimePreview({
+    event: makeGroupEvent('[CQ:at,qq=1525899506] 今天天气怎么样'),
+    client: makeClient(),
+    cfg: makeConfig(),
+  });
+  assert.doesNotMatch(ordinary.aiInput, /GROUP_MANAGEMENT_CONTEXT_JSON/);
+
+  const management = await botCore.buildAiRuntimePreview({
+    event: makeGroupEvent('[CQ:at,qq=1525899506][CQ:at,qq=2089931398] 禁言十分钟'),
+    client: makeClient(),
+    cfg: makeConfig(),
+  });
+  assert.match(management.aiInput, /GROUP_MANAGEMENT_CONTEXT_JSON/);
+  assert.match(management.aiInput, /"requester_is_configured_admin":true/);
+  assert.match(management.aiInput, /群管理写操作只有当前消息明确确认时才执行/);
 });
 
 test('group runtime merges bot replies and ambient messages into one chronological event timeline', async () => {

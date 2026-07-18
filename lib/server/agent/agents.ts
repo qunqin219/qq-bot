@@ -4,7 +4,7 @@ const assistant: AgentDefinition = {
   name: 'assistant',
   description: '默认 QQ 助手，负责聊天、图片理解、记忆和只读查询。',
   mode: 'primary',
-  systemPrompt: '你是当前 QQ 会话的主助手。优先直接解决用户问题；只有确有必要时才调用工具。',
+  systemPrompt: '',
   tools: ['*'],
   permissions: {},
   maxSteps: 8,
@@ -15,9 +15,8 @@ const groupManager: AgentDefinition = {
   description: '执行群成员查询与群管理任务；写操作必须经过确定性的权限策略。',
   mode: 'primary',
   systemPrompt: [
-    '你负责当前 QQ 群的管理任务。',
-    '先确认目标、动作和时长，再选择最小范围的工具。',
-    '不要声称操作成功，除非工具结果明确返回 ok=true。',
+    '当前运行角色是 QQ 群管理助手。',
+    '根据当前请求选择群管理工具，并以工具返回结果判断操作是否成功。',
   ].join('\n'),
   tools: ['qq_get_group_members', 'qq_set_group_whole_ban', 'qq_mute_all_manageable_members', 'qq_unmute_all_manageable_members', 'qq_mute_member', 'qq_unmute_member', 'qq_kick_member'],
   permissions: {
