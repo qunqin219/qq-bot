@@ -20,10 +20,27 @@ async function handleAiTurn(
 ): Promise<void> {
   const { userId, msgType, groupId, isAdmin, cleanMsg } = ctxInfo;
   const startedAt = Date.now();
+  const channel = new QQChannelAdapter(client);
 
   let result;
   try {
-    result = await runAgentTurn({ event, client, cfg, cleanMsg, requesterIsAdmin: isAdmin });
+    result = await runAgentTurn({
+      event,
+      client,
+      cfg,
+      cleanMsg,
+      requesterIsAdmin: isAdmin,
+      onProgress: async (progress) => {
+        const sendResult = await channel.sendProgress(event, progress.text);
+        if (sendResult?.status && sendResult.status !== 'ok') {
+          throw new Error(String(sendResult.wording || sendResult.msg || `OneBot status=${sendResult.status}`));
+        }
+        console.log(
+          `[Agent] 过程消息发送完成 run=${progress.runId} index=${progress.index} round=${progress.round} ` +
+          `source=${progress.source} result=${compactJson(summarizeOneBotResult(sendResult))}`
+        );
+      },
+    });
   } catch (error) {
     console.error('[BotCore] Agent 运行失败:', error);
     return;
@@ -66,7 +83,6 @@ async function handleAiTurn(
     }
   );
 
-  const channel = new QQChannelAdapter(client);
   const sendResult = await channel.send(event, cfg, aiReply, parsedReply.replyMessageId);
   console.log(
     `[Agent] 回复发送完成 run=${result.run.id} conversation=${result.conversationKey} ` +

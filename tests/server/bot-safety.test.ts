@@ -15,6 +15,7 @@ process.env.QQ_BOT_STORE_BACKEND = 'json';
 process.env.QQ_BOT_MESSAGES_FILE = path.join(tempRoot, 'messages.json');
 process.env.QQ_BOT_CONVERSATIONS_FILE = path.join(tempRoot, 'conversations.json');
 process.env.QQ_BOT_MEMORIES_FILE = path.join(tempRoot, 'memories.json');
+process.env.QQ_BOT_AGENT_RUNTIME_FILE = path.join(tempRoot, 'agent-runtime.json');
 process.env.QQ_BOT_IMAGE_CACHE_DIR = path.join(tempRoot, 'images');
 process.env.QQ_BOT_SESSIONS_FILE = path.join(tempRoot, 'sessions.json');
 
@@ -122,3 +123,47 @@ test('mutating group management tools require explicit confirmation', async () =
   }
 });
 
+test('tool progress sends at most two plain group messages before the final reply', async () => {
+  saveConfig({
+    ...DEFAULT_CONFIG,
+    admins: [111],
+    ai_enabled: true,
+    ai_api_key: 'test-key',
+    ai_group_context_enabled: false,
+    ai_memory_enabled: false,
+    ai_group_reply_quote_enabled: true,
+  });
+
+  const sent: string[] = [];
+  const client = {
+    getGroupMemberInfo: async (_groupId: number, userId: number) => ({
+      status: 'ok',
+      data: { user_id: userId, role: userId === 999 ? 'admin' : 'member' },
+    }),
+    sendGroupMsg: async (_groupId: number, message: string) => {
+      sent.push(message);
+      return { status: 'ok' };
+    },
+  };
+  const oldChat = ai._overrideChat((async (_input: string, _history: any[], _cfg: Record<string, any>, options: Record<string, any>) => {
+    await options.onProgress({ round: 1, text: '我先查一下。', source: 'builtin_tool', toolNames: ['web_search'] });
+    await options.onProgress({ round: 2, text: '我再核对一下。', source: 'model', toolNames: ['web_fetch'] });
+    await options.onProgress({ round: 3, text: '不应发送的第三条进度。', source: 'model', toolNames: ['web_fetch'] });
+    return '这是最终回答。';
+  }) as any);
+
+  try {
+    await botCore.handleEvent(messageEvent({
+      user_id: 111,
+      raw_message: '[CQ:reply,id=12345][CQ:at,qq=999] 帮我查一下',
+      message: '[CQ:reply,id=12345][CQ:at,qq=999] 帮我查一下',
+    }), client as any);
+    assert.deepEqual(sent, [
+      '我先查一下。',
+      '我再核对一下。',
+      '[CQ:reply,id=12345]这是最终回答。',
+    ]);
+  } finally {
+    ai._restoreChat(oldChat);
+  }
+});

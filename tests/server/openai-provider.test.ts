@@ -73,12 +73,18 @@ test('OpenAI request builder supports the complete GPT-5.6 family and Responses 
 test('OpenAI tool loop preserves call_id and appends tool-provided images', async () => {
   const oldFetch = global.fetch;
   const requests: Array<{ url: string; init: Record<string, any>; body: Record<string, any> }> = [];
+  const progress: Array<Record<string, any>> = [];
   const responses = [
     {
       id: 'resp_tool',
       model: 'gpt-5.6-terra',
       status: 'completed',
       output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '我先仔细看一下图片。' }],
+        },
         {
           type: 'function_call',
           id: 'fc_1',
@@ -125,10 +131,17 @@ test('OpenAI tool loop preserves call_id and appends tool-provided images', asyn
           ],
         };
       },
+      onProgress: (update) => { progress.push(update); },
     });
 
     assert.equal(reply, '图片中是一只猫。');
     assert.equal(requests.length, 2);
+    assert.deepEqual(progress, [{
+      round: 1,
+      text: '我先仔细看一下图片。',
+      source: 'model',
+      toolNames: ['qq_read_image'],
+    }]);
     assert.equal(requests[0].url, 'https://api.example.test/v1/responses');
     assert.equal(requests[0].init.headers.Authorization, 'Bearer test-openai-key');
     assert.equal(requests[0].body.stream, true);
@@ -149,10 +162,12 @@ test('OpenAI tool loop preserves call_id and appends tool-provided images', asyn
 test('OpenAI provider consumes Responses SSE streams without exposing unsolicited citations', async () => {
   const oldFetch = global.fetch;
   let requestBody: Record<string, any> | null = null;
+  const progress: Array<Record<string, any>> = [];
   global.fetch = (async (_url: string, init: Record<string, any>) => {
     requestBody = JSON.parse(String(init.body));
     const events = [
       { type: 'response.created', response: { id: 'resp_stream', model: 'gpt-5.6-sol', status: 'in_progress' } },
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'web_search_call', id: 'ws_stream', status: 'in_progress' } },
       { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
       { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '流式搜索完成。' },
       {
@@ -164,7 +179,16 @@ test('OpenAI provider consumes Responses SSE streams without exposing unsolicite
       { type: 'response.completed', response: { id: 'resp_stream', model: 'gpt-5.6-sol', status: 'completed' } },
     ];
     const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`;
-    return new Response(sse, {
+    const encoded = new TextEncoder().encode(sse);
+    const stream = new ReadableStream({
+      start(controller) {
+        for (let offset = 0; offset < encoded.length; offset += 37) {
+          controller.enqueue(encoded.slice(offset, offset + 37));
+        }
+        controller.close();
+      },
+    });
+    return new Response(stream, {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
     });
@@ -173,9 +197,17 @@ test('OpenAI provider consumes Responses SSE streams without exposing unsolicite
   try {
     const reply = await ai.chat('搜索 OpenAI 文档', [], makeCfg({
       ai_web_search_enabled: true,
-    }));
+    }), {
+      onProgress: (update) => { progress.push(update); },
+    });
     assert.equal((requestBody as Record<string, any> | null)?.stream, true);
     assert.equal(reply, '流式搜索完成。');
+    assert.deepEqual(progress, [{
+      round: 1,
+      text: '',
+      source: 'builtin_tool',
+      toolNames: ['web_search'],
+    }]);
   } finally {
     global.fetch = oldFetch;
   }

@@ -11,4 +11,11 @@ export class QQChannelAdapter {
     }
     return await this.client.sendPrivateMsg!(event.user_id as number | string, text);
   }
+
+  async sendProgress(event: OneBotEvent, text: string): Promise<Record<string, any>> {
+    if (event.group_id) {
+      return await this.client.sendGroupMsg!(event.group_id, text);
+    }
+    return await this.client.sendPrivateMsg!(event.user_id as number | string, text);
+  }
 }

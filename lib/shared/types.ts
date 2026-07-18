@@ -167,6 +167,7 @@ export interface SandboxMessage {
   text: string;
   reply_to: number | null;
   from_bot: boolean;
+  kind?: 'message' | 'progress';
   created_at: string;
   run_id?: string;
   agent?: string;

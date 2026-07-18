@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { BotConfig, OneBotClient, OneBotEvent } from '../bot/types.js';
-import type { AgentContext, AgentPartRecord, AgentRunRecord } from './types.js';
+import type { ToolProgressUpdate } from '../ai/types.js';
+import type { AgentContext, AgentPartRecord, AgentProgressUpdate, AgentRunRecord } from './types.js';
 import * as ai from '../ai.js';
 import { buildAiRuntimePreview } from '../bot/context/preview.js';
 import { conversationStore } from '../store/index.js';
@@ -28,6 +29,7 @@ export type AgentTurnInput = {
   cleanMsg: string;
   requesterIsAdmin: boolean;
   runtime?: AgentRuntimeOverride;
+  onProgress?: (update: AgentProgressUpdate) => Promise<void> | void;
 };
 
 export type AgentTurnResult = {
@@ -41,6 +43,15 @@ export type AgentTurnResult = {
 };
 
 let recovered = false;
+
+const MAX_VISIBLE_PROGRESS_MESSAGES = 2;
+const SILENT_PROGRESS_TOOLS = new Set(['create_memory', 'edit_memory', 'delete_memory']);
+const PROGRESS_SYSTEM_INSTRUCTION = [
+  '仅当本轮确实需要调用工具时，允许在工具调用前输出一句简短、自然的过程说明。',
+  '过程说明只说接下来要确认什么，不提前给结论，不展示思维链、工具名称、参数、原始结果或内部术语。',
+  '整个任务最多输出两次过程说明；工具全部完成后，再输出一条完整的最终回答。',
+  '这类简短过程说明属于允许发送给用户的正文，不属于内部推理或调试信息。',
+].join('\n');
 
 function ensureRecovery(): void {
   if (recovered) return;
@@ -59,6 +70,35 @@ function persistable(value: unknown): Record<string, unknown> {
 function textForStore(value: unknown, max = 12_000): string {
   const text = typeof value === 'string' ? value : JSON.stringify(persistable(value));
   return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
+function fallbackProgressText(toolNames: string[]): string {
+  if (toolNames.includes('web_search')) return '我先查一下相关信息。';
+  if (toolNames.includes('web_fetch')) return '我先打开相关页面确认一下。';
+  if (toolNames.includes('qq_read_image')) return '我先仔细看一下相关图片。';
+  if (toolNames.includes('qq_get_group_members')) return '我先核对一下群成员信息。';
+  if (toolNames.some((name) => name.startsWith('qq_'))) return '我先确认一下当前情况。';
+  return '我先处理一下。';
+}
+
+function visibleProgressText(update: ToolProgressUpdate): string {
+  const visibleTools = update.toolNames.filter((name) => !SILENT_PROGRESS_TOOLS.has(name));
+  if (visibleTools.length === 0) return '';
+
+  let text = String(update.text || '')
+    .replace(/^引用消息ID[:：]\s*\d+\s*/i, '')
+    .replace(/\[CQ:[^\]]+\]/gi, '')
+    .replace(/https?:\/\/\S+/gi, '')
+    .trim();
+  text = text.split(/\n{2,}/, 1)[0].replace(/\s+/g, ' ').trim();
+  if (
+    !text ||
+    text.length > 180 ||
+    /```|\{\s*"|\b(?:web_search|web_fetch|qq_[a-z_]+|create_memory|edit_memory|delete_memory)\b/i.test(text)
+  ) {
+    return fallbackProgressText(visibleTools);
+  }
+  return text;
 }
 
 export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
@@ -111,16 +151,59 @@ export async function runAgentTurn(input: AgentTurnInput): Promise<AgentTurnResu
   const functionDeclarations = qqToolRegistry.declarations(baseContext);
   let finalProviderTurn: Record<string, any> | null = null;
   let destructiveToolRequested = false;
+  let visibleProgressCount = 0;
+  const visibleProgressTexts = new Set<string>();
+
+  const emitVisibleProgress = async (update: ToolProgressUpdate): Promise<void> => {
+    if (!input.onProgress || visibleProgressCount >= MAX_VISIBLE_PROGRESS_MESSAGES) return;
+    const text = visibleProgressText(update);
+    const key = text.toLowerCase();
+    if (!text || visibleProgressTexts.has(key)) return;
+
+    const index = visibleProgressCount + 1;
+    const progress: AgentProgressUpdate = {
+      runId,
+      index,
+      text,
+      round: update.round,
+      source: update.source,
+      toolNames: [...update.toolNames],
+    };
+    try {
+      await input.onProgress(progress);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[Agent] 过程消息发送失败 run=${runId} index=${index}: ${message}`);
+      agentRunStore.addPart({
+        id: randomUUID(), run_id: runId, session_id: session.id, type: 'progress', status: 'failed',
+        tool_name: '', content: text, metadata: { round: update.round, source: update.source, tool_names: update.toolNames, error: message },
+      });
+      return;
+    }
+
+    visibleProgressCount = index;
+    visibleProgressTexts.add(key);
+    agentRunStore.addPart({
+      id: randomUUID(), run_id: runId, session_id: session.id, type: 'progress', status: 'completed',
+      tool_name: '', content: text, metadata: { index, round: update.round, source: update.source, tool_names: update.toolNames },
+    });
+    agentEventBus.emit({ type: 'progress.sent', runId, index, text, round: update.round, source: update.source });
+  };
 
   try {
     const reply = await ai.chat(runtime.aiInput, budgeted.history, cfg, {
       functionDeclarations,
-      extraSystemInstruction: [runtime.extraSystemInstruction, agent.systemPrompt].filter(Boolean).join('\n\n'),
+      extraSystemInstruction: [
+        runtime.extraSystemInstruction,
+        agent.systemPrompt,
+        input.onProgress ? PROGRESS_SYSTEM_INSTRUCTION : '',
+      ].filter(Boolean).join('\n\n'),
       autoAttachImages: !event.group_id || (runtime.groupInlineImageParts?.length || 0) === 0,
       extraParts: runtime.groupInlineImageParts || [],
       maxToolRounds: Math.max(1, Math.min(8, agent.maxSteps)),
       maxToolCalls: Math.max(1, Math.min(20, Number(cfg.agent_max_tool_calls || 8))),
       signal,
+      onProgress: emitVisibleProgress,
       onFinalTurn: (turn: Record<string, any>) => { finalProviderTurn = turn; },
       onBuiltinToolCalls: (calls, meta) => {
         for (const call of calls) {

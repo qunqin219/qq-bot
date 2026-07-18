@@ -107,7 +107,18 @@ async function chat(
           `[AI] ${provider.name} 第${round}轮请求开始 attempt=${attempt + 1}/${maxHttpRetries + 1} ` +
           `items=${provider.getInputItemCount(body)} executed_tool_calls=${executedToolCalls}`
         );
-        resp = await provider.sendRequest(body, cfg, options.signal);
+        resp = await provider.sendRequest(body, cfg, {
+          signal: options.signal,
+          onStreamEvent: async (event) => {
+            if (event.type !== 'builtin_tool.started') return;
+            await options.onProgress?.({
+              round,
+              text: '',
+              source: 'builtin_tool',
+              toolNames: [event.tool],
+            });
+          },
+        });
         console.log(
           `[AI] ${provider.name} 第${round}轮响应 status=${resp.status} duration_ms=${Date.now() - roundStartedAt} ` +
           `attempt=${attempt + 1}/${maxHttpRetries + 1}`
@@ -227,6 +238,15 @@ async function chat(
             },
           });
         }
+      }
+
+      if (callsToRun.length > 0) {
+        await options.onProgress?.({
+          round,
+          text: sanitizedReply.blocked ? '' : reply,
+          source: 'model',
+          toolNames: callsToRun.map((call) => call.name),
+        });
       }
 
       for (const [index, call] of callsToRun.entries()) {

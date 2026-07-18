@@ -39,7 +39,7 @@ const OpenAIProvider: LLMProvider = {
     return buildRequestBody(userMessage, history, cfg, options);
   },
 
-  async sendRequest(body: OpenAIRequestBody, cfg: AiConfig, signal?: AbortSignal): Promise<Response> {
+  async sendRequest(body: OpenAIRequestBody, cfg: AiConfig, options = {}): Promise<Response> {
     const response = await fetch(buildResponsesUrl(resolveOpenAIBaseUrl(cfg)), {
       method: 'POST',
       headers: {
@@ -47,9 +47,19 @@ const OpenAIProvider: LLMProvider = {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
-      signal,
+      signal: options.signal,
     });
-    return normalizeOpenAIStreamingResponse(response);
+    let webSearchStarted = false;
+    return normalizeOpenAIStreamingResponse(response, async (event) => {
+      const eventType = String(event.type || '');
+      const isWebSearchStart = (
+        eventType === 'response.output_item.added' && event.item?.type === 'web_search_call'
+      ) || eventType === 'response.web_search_call.in_progress' || eventType === 'response.web_search_call.searching';
+      if (!webSearchStarted && isWebSearchStart) {
+        webSearchStarted = true;
+        await options.onStreamEvent?.({ type: 'builtin_tool.started', tool: 'web_search' });
+      }
+    });
   },
 
   extractFunctionCalls(data: OpenAIResponse) {

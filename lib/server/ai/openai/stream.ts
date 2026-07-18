@@ -19,23 +19,26 @@ function clone<T>(value: T): T | null {
   }
 }
 
+function parseSseBlock(block: string): Record<string, any> | null {
+  const data = String(block || '')
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart())
+    .join('\n')
+    .trim();
+  if (!data || data === '[DONE]') return null;
+  try {
+    return record(JSON.parse(data));
+  } catch {
+    return null;
+  }
+}
+
 function parseSseEvents(text: string): Array<Record<string, any>> {
   const events: Array<Record<string, any>> = [];
   for (const block of String(text || '').split(/\r?\n\r?\n/)) {
-    const data = block
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n')
-      .trim();
-    if (!data || data === '[DONE]') continue;
-    try {
-      const parsed = JSON.parse(data);
-      if (record(parsed)) events.push(parsed);
-    } catch {
-      // Ignore a malformed event and continue; a later response.completed event
-      // may still contain the complete response.
-    }
+    const event = parseSseBlock(block);
+    if (event) events.push(event);
   }
   return events;
 }
@@ -133,14 +136,58 @@ function parseOpenAIEventStream(text: string): ParsedStream {
   };
 }
 
-async function normalizeOpenAIStreamingResponse(response: Response): Promise<Response> {
+async function readEventStream(
+  response: Response,
+  onEvent?: (event: Record<string, any>) => Promise<void> | void
+): Promise<string> {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let raw = '';
+  let buffer = '';
+
+  const dispatch = async (block: string): Promise<void> => {
+    const event = parseSseBlock(block);
+    if (!event || !onEvent) return;
+    try {
+      await onEvent(event);
+    } catch (error) {
+      console.warn('[AI] OpenAI 流式事件回调失败，继续读取响应:', error);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    const text = decoder.decode(value, { stream: !done });
+    raw += text;
+    buffer += text;
+
+    let separator = /\r?\n\r?\n/.exec(buffer);
+    while (separator?.index !== undefined) {
+      const block = buffer.slice(0, separator.index);
+      buffer = buffer.slice(separator.index + separator[0].length);
+      await dispatch(block);
+      separator = /\r?\n\r?\n/.exec(buffer);
+    }
+    if (done) break;
+  }
+
+  if (buffer.trim()) await dispatch(buffer);
+  return raw;
+}
+
+async function normalizeOpenAIStreamingResponse(
+  response: Response,
+  onEvent?: (event: Record<string, any>) => Promise<void> | void
+): Promise<Response> {
   const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
   if (contentType.includes('application/json')) return response;
   // Test doubles and a few compatible clients expose json()/text() but no body.
   // Leave those untouched so the model-agnostic loop can consume them normally.
   if (!response.body || typeof response.text !== 'function') return response;
 
-  const raw = await response.text();
+  const raw = contentType.includes('text/event-stream') && typeof response.body.getReader === 'function'
+    ? await readEventStream(response, onEvent)
+    : await response.text();
   if (!contentType.includes('text/event-stream') && /^\s*(?:\{|\[)/.test(raw)) {
     const headers = new Headers(response.headers);
     headers.set('Content-Type', 'application/json');

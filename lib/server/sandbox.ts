@@ -171,6 +171,19 @@ export class QQSandbox {
         cleanMsg: text,
         requesterIsAdmin: sender.user_id === OWNER_ID,
         runtime: this.buildRuntime(mode, incoming),
+        onProgress: async (progress) => {
+          this.addMessage({
+            mode,
+            userId: BOT_ID,
+            senderName: 'Agent Bot',
+            senderRole: 'admin',
+            text: progress.text,
+            replyTo: null,
+            fromBot: true,
+            kind: 'progress',
+            runId: progress.runId,
+          });
+        },
       });
 
       const parsed = parseAiReplyDirective(result.reply || '');
@@ -187,6 +200,7 @@ export class QQSandbox {
           text: parsed.text,
           replyTo: validReplyTarget,
           fromBot: true,
+          kind: 'message',
           runId: result.run.id,
           agent: result.agent,
         })
@@ -236,6 +250,7 @@ export class QQSandbox {
     text: string;
     replyTo: number | null;
     fromBot: boolean;
+    kind?: 'message' | 'progress';
     runId?: string;
     agent?: string;
   }): SandboxMessage {
@@ -250,6 +265,7 @@ export class QQSandbox {
       text: input.text,
       reply_to: input.replyTo,
       from_bot: input.fromBot,
+      kind: input.kind || 'message',
       created_at: new Date().toISOString(),
       ...(input.runId ? { run_id: input.runId } : {}),
       ...(input.agent ? { agent: input.agent } : {}),
@@ -281,7 +297,9 @@ export class QQSandbox {
   }
 
   private buildRuntime(mode: SandboxMode, current: SandboxMessage) {
-    const previous = this.messages[mode].filter((message) => message.id !== current.id).slice(-40);
+    const previous = this.messages[mode]
+      .filter((message) => message.id !== current.id && message.kind !== 'progress')
+      .slice(-40);
     const history = previous.map((message) => ({
       role: message.from_bot ? 'model' as const : 'user' as const,
       text: mode === 'group' && !message.from_bot

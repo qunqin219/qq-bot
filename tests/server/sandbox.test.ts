@@ -123,3 +123,40 @@ test('sandbox OneBot management calls mutate only simulated group state and rese
   assert.equal(reset.group.members.every((member) => !member.kicked && member.muted_until === null), true);
   assert.equal(reset.messages.private.length + reset.messages.group.length, 0);
 });
+
+test('sandbox shows progress messages but excludes them from the next model history', async () => {
+  const calls: AgentTurnInput[] = [];
+  const sandbox = new QQSandbox({
+    config,
+    run: async (input) => {
+      calls.push(input);
+      if (calls.length === 1) {
+        await input.onProgress?.({
+          runId: 'sandbox-progress-run', index: 1, text: '我先查一下。', round: 1,
+          source: 'builtin_tool', toolNames: ['web_search'],
+        });
+        await input.onProgress?.({
+          runId: 'sandbox-progress-run', index: 2, text: '我再核对一下。', round: 2,
+          source: 'model', toolNames: ['web_fetch'],
+        });
+      }
+      return result(calls.length === 1 ? '最终回答' : '第二次最终回答', `sandbox-run-${calls.length}`);
+    },
+  });
+
+  const first = await sandbox.send({ mode: 'private', text: '帮我查一下' });
+  assert.deepEqual(
+    first.state.messages.private.map((message) => [message.kind, message.text]),
+    [
+      ['message', '帮我查一下'],
+      ['progress', '我先查一下。'],
+      ['progress', '我再核对一下。'],
+      ['message', '最终回答'],
+    ]
+  );
+
+  await sandbox.send({ mode: 'private', text: '继续' });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].runtime?.history.some((item) => /我先查一下|我再核对一下/.test(item.text)), false);
+  assert.equal(calls[1].runtime?.history.some((item) => item.text === '最终回答'), true);
+});

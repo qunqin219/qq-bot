@@ -12,6 +12,16 @@ import type {
   ToolResult,
 } from './types.js';
 
+export type ProviderStreamEvent = {
+  type: 'builtin_tool.started';
+  tool: string;
+};
+
+export type ProviderRequestOptions = {
+  signal?: AbortSignal;
+  onStreamEvent?: (event: ProviderStreamEvent) => Promise<void> | void;
+};
+
 export interface LLMProvider {
   readonly name: string;
 
@@ -27,7 +37,7 @@ export interface LLMProvider {
   ): Promise<any>;
 
   // 发送 HTTP 请求，返回原始 Response
-  sendRequest(body: any, cfg: AiConfig, signal?: AbortSignal): Promise<Response>;
+  sendRequest(body: any, cfg: AiConfig, options?: ProviderRequestOptions): Promise<Response>;
 
   // 从响应中提取函数调用
   extractFunctionCalls(data: any): FunctionCall[];

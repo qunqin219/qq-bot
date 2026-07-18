@@ -18,6 +18,7 @@ export type AgentPartType =
   | 'output'
   | 'tool_call'
   | 'tool_result'
+  | 'progress'
   | 'approval'
   | 'compaction'
   | 'error';
@@ -100,6 +101,15 @@ export type AgentPartRecord = {
   completed_at: string | null;
 };
 
+export type AgentProgressUpdate = {
+  runId: string;
+  index: number;
+  text: string;
+  round: number;
+  source: 'model' | 'builtin_tool';
+  toolNames: string[];
+};
+
 export type AgentApprovalRecord = {
   id: string;
   run_id: string;
@@ -121,6 +131,7 @@ export type AgentEvent =
   | { type: 'tool.requested'; runId: string; part: AgentPartRecord }
   | { type: 'tool.started'; runId: string; toolCallId: string; tool: string }
   | { type: 'tool.completed'; runId: string; toolCallId: string; tool: string; result: Record<string, unknown> }
+  | { type: 'progress.sent'; runId: string; index: number; text: string; round: number; source: 'model' | 'builtin_tool' }
   | { type: 'approval.requested'; runId: string; approval: AgentApprovalRecord }
   | { type: 'run.completed'; runId: string; output: string }
   | { type: 'run.failed'; runId: string; error: string }

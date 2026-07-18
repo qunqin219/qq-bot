@@ -32,7 +32,7 @@ const GeminiProvider: LLMProvider = {
     return geminiBuildRequestBody(userMessage, history, cfg, options);
   },
 
-  async sendRequest(body, cfg: AiConfig, signal?: AbortSignal): Promise<Response> {
+  async sendRequest(body, cfg: AiConfig, options = {}): Promise<Response> {
     const baseUrl = (cfg.ai_base_url || 'https://generativelanguage.googleapis.com/v1beta')
       .replace(/\/+$/, '');
     const model = cfg.ai_model || 'gemini-3.5-flash';
@@ -42,7 +42,7 @@ const GeminiProvider: LLMProvider = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal,
+      signal: options.signal,
     });
   },
 

@@ -54,6 +54,13 @@ export type BuiltinToolAudit = {
   output: Record<string, unknown>;
 };
 
+export type ToolProgressUpdate = {
+  round: number;
+  text: string;
+  source: 'model' | 'builtin_tool';
+  toolNames: string[];
+};
+
 export type SanitizedReply = {
   text: string;
   leaked: boolean;
@@ -81,6 +88,7 @@ export type ChatOptions = {
     calls: BuiltinToolAudit[],
     context: { round: number }
   ) => void;
+  onProgress?: (update: ToolProgressUpdate) => Promise<void> | void;
   signal?: AbortSignal;
 };
 
