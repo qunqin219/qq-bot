@@ -22,6 +22,11 @@ export type ProviderRequestOptions = {
   onStreamEvent?: (event: ProviderStreamEvent) => Promise<void> | void;
 };
 
+export type PrepareToolResultsOptions = {
+  signal?: AbortSignal;
+  userMessage?: unknown;
+};
+
 export interface LLMProvider {
   readonly name: string;
 
@@ -53,6 +58,14 @@ export interface LLMProvider {
 
   // 构建函数响应 parts
   buildFunctionResponseParts(results: ToolResult[]): any[];
+
+  // Provider 可在续接主工具循环前转换工具结果。例如把中转无法直接处理的图片工具结果
+  // 先通过一次普通多模态请求识别成文本。
+  prepareToolResults?(
+    results: ToolResult[],
+    cfg: AiConfig,
+    options?: PrepareToolResultsOptions
+  ): Promise<ToolResult[]>;
 
   // 构建用于历史记录的模型内容
   buildModelContentForHistory(

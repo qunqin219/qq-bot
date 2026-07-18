@@ -265,6 +265,7 @@ export {
   extractThoughtText,
   getLastUserContent,
   removeInlineDataFromContent,
+  splitToolResponse,
   summarizeEnabledTools,
   summarizeResponseMetadata,
 };

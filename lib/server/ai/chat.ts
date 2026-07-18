@@ -283,7 +283,14 @@ async function chat(
         return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
       }
 
-      if (!provider.appendToolResults(body, data, roundToolResults)) {
+      const preparedToolResults = provider.prepareToolResults
+        ? await provider.prepareToolResults(roundToolResults, cfg, {
+          signal: options.signal,
+          userMessage,
+        })
+        : roundToolResults;
+
+      if (!provider.appendToolResults(body, data, preparedToolResults)) {
         console.warn('[AI] 模型请求工具但缺少可继续的响应条目，停止工具循环');
         return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
       }

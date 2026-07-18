@@ -95,6 +95,18 @@ test('OpenAI tool loop preserves call_id and appends tool-provided images', asyn
       ],
     },
     {
+      id: 'resp_image_reader',
+      model: 'gpt-5.6-terra',
+      status: 'completed',
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '图片识别结果：画面中是一只猫。' }],
+        },
+      ],
+    },
+    {
       id: 'resp_final',
       model: 'gpt-5.6-terra',
       status: 'completed',
@@ -135,7 +147,7 @@ test('OpenAI tool loop preserves call_id and appends tool-provided images', asyn
     });
 
     assert.equal(reply, '图片中是一只猫。');
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 3);
     assert.deepEqual(progress, [{
       round: 1,
       text: '我先仔细看一下图片。',
@@ -146,16 +158,22 @@ test('OpenAI tool loop preserves call_id and appends tool-provided images', asyn
     assert.equal(requests[0].init.headers.Authorization, 'Bearer test-openai-key');
     assert.equal(requests[0].body.stream, true);
 
-    const continuation = requests[1].body.input;
+    const imageReader = requests[1].body;
+    assert.equal(imageReader.input.length, 1);
+    assert.equal(imageReader.tools, undefined);
+    assert.match(imageReader.input[0].content[0].text, /主 Agent 当前需要回答的用户请求：看看图片/);
+    assert.equal(imageReader.input[0].content[1].type, 'input_image');
+    assert.equal(imageReader.input[0].content[1].image_url, 'data:image/png;base64,aW1hZ2U=');
+    assert.equal(imageReader.input[0].content[1].detail, 'original');
+
+    const continuation = requests[2].body.input;
     assert.ok(continuation.some((item: any) => item.type === 'function_call' && item.call_id === 'call_123'));
     const output = continuation.find((item: any) => item.type === 'function_call_output');
     assert.equal(output.call_id, 'call_123');
-    assert.ok(Array.isArray(output.output));
-    assert.equal(JSON.parse(output.output[0].text.split('\n')[0]).__ai_inline_parts, undefined);
-    assert.match(output.output[0].text, /原始图片/);
-    assert.equal(output.output[1].type, 'input_image');
-    assert.equal(output.output[1].image_url, 'data:image/png;base64,aW1hZ2U=');
-    assert.equal(output.output[1].detail, 'auto');
+    assert.equal(typeof output.output, 'string');
+    const toolOutput = JSON.parse(output.output);
+    assert.equal(toolOutput.__ai_inline_parts, undefined);
+    assert.equal(toolOutput.image_analysis, '图片识别结果：画面中是一只猫。');
     assert.equal(continuation.some((item: any) => (
       item.role === 'user' && item.content?.some((part: any) => part.type === 'input_image')
     )), false);
