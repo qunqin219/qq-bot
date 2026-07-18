@@ -150,10 +150,15 @@ test('OpenAI tool loop preserves call_id and appends tool-provided images', asyn
     assert.ok(continuation.some((item: any) => item.type === 'function_call' && item.call_id === 'call_123'));
     const output = continuation.find((item: any) => item.type === 'function_call_output');
     assert.equal(output.call_id, 'call_123');
-    assert.equal(JSON.parse(output.output).__ai_inline_parts, undefined);
-    assert.ok(continuation.some((item: any) => (
+    assert.ok(Array.isArray(output.output));
+    assert.equal(JSON.parse(output.output[0].text.split('\n')[0]).__ai_inline_parts, undefined);
+    assert.match(output.output[0].text, /原始图片/);
+    assert.equal(output.output[1].type, 'input_image');
+    assert.equal(output.output[1].image_url, 'data:image/png;base64,aW1hZ2U=');
+    assert.equal(output.output[1].detail, 'auto');
+    assert.equal(continuation.some((item: any) => (
       item.role === 'user' && item.content?.some((part: any) => part.type === 'input_image')
-    )));
+    )), false);
   } finally {
     global.fetch = oldFetch;
   }

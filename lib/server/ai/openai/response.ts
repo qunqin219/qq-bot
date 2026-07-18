@@ -133,11 +133,23 @@ function buildFunctionResponseParts(results: ToolResult[]): Array<Record<string,
   return results
     .filter((item) => Boolean(item.callId))
     .map((item) => {
-      const { publicResponse } = splitToolResponse(item.response);
+      const { publicResponse, images } = splitToolResponse(item.response);
+      const serialized = serializeToolOutput(publicResponse);
       return {
         type: 'function_call_output',
         call_id: String(item.callId),
-        output: serializeToolOutput(publicResponse),
+        output: images.length > 0
+          ? [
+            {
+              type: 'input_text',
+              text: [
+                serialized,
+                '以上工具结果附带的图片就是本次工具读取到的原始图片。请直接查看紧随其后的图片，并只把图中实际可见的内容归到这张图片。',
+              ].join('\n'),
+            },
+            ...images,
+          ]
+          : serialized,
       };
     });
 }
@@ -154,16 +166,6 @@ function appendToolResults(
   if (output.length === 0 || functionOutputs.length !== results.length) return false;
 
   body.input.push(...output, ...functionOutputs);
-  const images = results.flatMap((item) => splitToolResponse(item.response).images);
-  if (images.length > 0) {
-    body.input.push({
-      role: 'user',
-      content: [
-        { type: 'input_text', text: '下面是刚才工具返回的图片，请结合对应工具结果继续回答。' },
-        ...images,
-      ],
-    });
-  }
   return true;
 }
 
