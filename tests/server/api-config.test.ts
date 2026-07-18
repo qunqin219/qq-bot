@@ -136,3 +136,21 @@ test('loading config removes legacy Agent approval settings', () => {
   assert.equal(Object.hasOwn(persisted, 'agent_approval_ttl_ms'), false);
   assert.equal(Object.hasOwn(persisted, 'agent_tool_permissions'), false);
 });
+
+test('loading config persists the upgraded default system prompt', () => {
+  const configFile = process.env.QQ_BOT_CONFIG_FILE!;
+  const previousPlainTextDefault = DEFAULT_CONFIG.ai_system_prompt
+    .split('\n')
+    .filter((line) => !line.includes('多个彼此独立且可靠的来源交叉验证'))
+    .join('\n');
+  fs.writeFileSync(configFile, JSON.stringify({
+    ...DEFAULT_CONFIG,
+    ai_system_prompt: previousPlainTextDefault,
+  }, null, 2));
+
+  const config = loadConfig();
+  assert.equal(config.ai_system_prompt, DEFAULT_CONFIG.ai_system_prompt);
+
+  const persisted = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.equal(persisted.ai_system_prompt, DEFAULT_CONFIG.ai_system_prompt);
+});

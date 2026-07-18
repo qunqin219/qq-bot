@@ -116,12 +116,16 @@ export function loadConfig(): BotConfig {
     );
     delete activeCfg.agent_approval_ttl_ms;
     delete activeCfg.agent_tool_permissions;
-    if (hadLegacyApprovalConfig) saveConfig(activeCfg);
     // 合并默认值
     const merged = { ...DEFAULT_CONFIG, ...activeCfg };
+    const normalizedSystemPrompt = normalizeSystemPrompt(merged.ai_system_prompt);
+    const hadLegacySystemPrompt = normalizedSystemPrompt !== String(merged.ai_system_prompt || '').trim();
+    if (hadLegacyApprovalConfig || hadLegacySystemPrompt) {
+      saveConfig({ ...activeCfg, ai_system_prompt: normalizedSystemPrompt });
+    }
     return {
       ...merged,
-      ai_system_prompt: normalizeSystemPrompt(merged.ai_system_prompt),
+      ai_system_prompt: normalizedSystemPrompt,
     };
   }
   // 文件不存在，写入默认配置
