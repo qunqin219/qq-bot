@@ -72,15 +72,6 @@ function textForStore(value: unknown, max = 12_000): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
-function fallbackProgressText(toolNames: string[]): string {
-  if (toolNames.includes('web_search')) return '我先查一下相关信息。';
-  if (toolNames.includes('web_fetch')) return '我先打开相关页面确认一下。';
-  if (toolNames.includes('qq_read_image')) return '我先仔细看一下相关图片。';
-  if (toolNames.includes('qq_get_group_members')) return '我先核对一下群成员信息。';
-  if (toolNames.some((name) => name.startsWith('qq_'))) return '我先确认一下当前情况。';
-  return '我先处理一下。';
-}
-
 function visibleProgressText(update: ToolProgressUpdate): string {
   const visibleTools = update.toolNames.filter((name) => !SILENT_PROGRESS_TOOLS.has(name));
   if (visibleTools.length === 0) return '';
@@ -91,13 +82,8 @@ function visibleProgressText(update: ToolProgressUpdate): string {
     .replace(/https?:\/\/\S+/gi, '')
     .trim();
   text = text.split(/\n{2,}/, 1)[0].replace(/\s+/g, ' ').trim();
-  if (
-    !text ||
-    text.length > 180 ||
-    /```|\{\s*"|\b(?:web_search|web_fetch|qq_[a-z_]+|create_memory|edit_memory|delete_memory)\b/i.test(text)
-  ) {
-    return fallbackProgressText(visibleTools);
-  }
+  if (!text || text.length > 180) return '';
+  if (/```|\{\s*"|\b(?:web_search|web_fetch|qq_[a-z_]+|create_memory|edit_memory|delete_memory)\b/i.test(text)) return '';
   return text;
 }
 

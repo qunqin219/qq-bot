@@ -146,21 +146,22 @@ test('tool progress sends at most two plain group messages before the final repl
     },
   };
   const oldChat = ai._overrideChat((async (_input: string, _history: any[], _cfg: Record<string, any>, options: Record<string, any>) => {
-    await options.onProgress({ round: 1, text: '我先查一下。', source: 'builtin_tool', toolNames: ['web_search'] });
-    await options.onProgress({ round: 2, text: '我再核对一下。', source: 'model', toolNames: ['web_fetch'] });
-    await options.onProgress({ round: 3, text: '不应发送的第三条进度。', source: 'model', toolNames: ['web_fetch'] });
+    await options.onProgress({ round: 1, text: '', source: 'builtin_tool', toolNames: ['web_search'] });
+    await options.onProgress({ round: 2, text: '我先核对一下。', source: 'model', toolNames: ['web_fetch'] });
+    await options.onProgress({ round: 3, text: '我再确认一个细节。', source: 'model', toolNames: ['web_fetch'] });
+    await options.onProgress({ round: 4, text: '不应发送的第三条进度。', source: 'model', toolNames: ['web_fetch'] });
     return '这是最终回答。';
   }) as any);
 
   try {
     await botCore.handleEvent(messageEvent({
       user_id: 111,
-      raw_message: '[CQ:reply,id=12345][CQ:at,qq=999] 帮我查一下',
-      message: '[CQ:reply,id=12345][CQ:at,qq=999] 帮我查一下',
+      raw_message: '[CQ:reply,id=12345][CQ:at,qq=999] OpenAI 今天有什么新消息？',
+      message: '[CQ:reply,id=12345][CQ:at,qq=999] OpenAI 今天有什么新消息？',
     }), client as any);
     assert.deepEqual(sent, [
-      '我先查一下。',
-      '我再核对一下。',
+      '我先核对一下。',
+      '我再确认一个细节。',
       '[CQ:reply,id=12345]这是最终回答。',
     ]);
   } finally {
