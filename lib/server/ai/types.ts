@@ -31,6 +31,13 @@ export const THOUGHT_LEAK_REPAIR_PROMPT = [
   '不要输出 _thought、thinking、analysis、reasoning、思考过程、草稿或任何内部标签。',
 ].join('\n');
 
+export const TOOL_FINALIZATION_PROMPT = [
+  '工具调用已达到宿主允许的上限。不要再调用任何工具。',
+  '请仅根据当前对话和已经获得的工具结果，直接给出对用户有用的最终回答。',
+  '不要输出工具名称、调用过程、调试信息，也不要逐条复述“读取成功”或请求状态。',
+  '如果现有证据不足或部分请求失败，请简洁说明结论边界，不要虚构。',
+].join('\n');
+
 // ── 通用类型（模型无关）──
 export type AiConfig = Record<string, any>;
 

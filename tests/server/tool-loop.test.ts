@@ -138,6 +138,61 @@ test('chat supports multi-round function calling', async () => {
   }
 });
 
+test('chat disables tools and asks the model for a final answer at the tool-call limit', async () => {
+  const oldFetch = global.fetch;
+  const requests: any[] = [];
+  const responses = [
+    functionCall('fetch_page', { url: 'https://example.test' }),
+    textReply('根据已经读取到的内容，结论是测试通过。'),
+  ];
+  global.fetch = (async (_url: any, init: any) => {
+    requests.push(JSON.parse(init.body));
+    return jsonResponse(responses.shift()!);
+  }) as any;
+
+  try {
+    const reply = await ai.chat('请查一下', [], makeCfg(), {
+      functionDeclarations: [
+        { name: 'fetch_page', parameters: { type: 'object', properties: {} } },
+      ],
+      maxToolCalls: 1,
+      executeFunctionCall: async () => ({ ok: true, message: '网页内容读取成功' }),
+    });
+
+    assert.equal(reply, '根据已经读取到的内容，结论是测试通过。');
+    assert.equal(requests.length, 2);
+    assert.ok(Array.isArray(requests[0].tools));
+    assert.equal(requests[1].tools, undefined);
+    assert.match(requests[1].contents.at(-1).parts[0].text, /不要再调用任何工具/);
+    assert.doesNotMatch(reply!, /网页内容读取成功/);
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
+test('chat never exposes raw tool status when finalization returns no text', async () => {
+  const oldFetch = global.fetch;
+  const responses = [
+    functionCall('fetch_page', { url: 'https://example.test' }),
+    textReply(''),
+  ];
+  global.fetch = (async () => jsonResponse(responses.shift()!)) as any;
+
+  try {
+    const reply = await ai.chat('请查一下', [], makeCfg(), {
+      functionDeclarations: [
+        { name: 'fetch_page', parameters: { type: 'object', properties: {} } },
+      ],
+      maxToolCalls: 1,
+      executeFunctionCall: async () => ({ ok: true, message: '网页内容读取成功' }),
+    });
+
+    assert.equal(reply, null);
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
 test('chat skips repeated same-name same-args tool calls', async () => {
   const oldFetch = global.fetch;
   const responses = [

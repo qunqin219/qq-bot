@@ -184,6 +184,65 @@ test('OpenAI tool loop resolves tool images through a direct vision request befo
   }
 });
 
+test('OpenAI tool loop disables all tools before finalizing at the call limit', async () => {
+  const oldFetch = global.fetch;
+  const requests: Array<Record<string, any>> = [];
+  const responses = [
+    {
+      id: 'resp_tool_limit',
+      model: 'gpt-5.6-sol',
+      status: 'completed',
+      output: [
+        {
+          type: 'function_call',
+          id: 'fc_limit',
+          call_id: 'call_limit',
+          name: 'web_fetch',
+          arguments: '{"url":"https://example.test"}',
+        },
+      ],
+    },
+    {
+      id: 'resp_tool_limit_final',
+      model: 'gpt-5.6-sol',
+      status: 'completed',
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '已有资料足以确认结论。' }],
+        },
+      ],
+    },
+  ];
+  global.fetch = (async (_url: string, init: Record<string, any>) => {
+    requests.push(JSON.parse(String(init.body)));
+    return jsonResponse(responses.shift()!);
+  }) as any;
+
+  try {
+    const reply = await ai.chat('查证一下', [], makeCfg({
+      ai_web_search_enabled: true,
+    }), {
+      functionDeclarations: [
+        { name: 'web_fetch', parameters: { type: 'object', properties: {} } },
+      ],
+      maxToolCalls: 1,
+      executeFunctionCall: async () => ({ ok: true, message: '网页内容读取成功' }),
+    });
+
+    assert.equal(reply, '已有资料足以确认结论。');
+    assert.equal(requests.length, 2);
+    assert.ok(Array.isArray(requests[0].tools));
+    assert.ok(Array.isArray(requests[0].include));
+    assert.equal(requests[1].tools, undefined);
+    assert.equal(requests[1].include, undefined);
+    assert.match(requests[1].input.at(-1).content[0].text, /不要再调用任何工具/);
+  } finally {
+    global.fetch = oldFetch;
+  }
+});
+
 test('OpenAI provider consumes Responses SSE streams without exposing unsolicited citations', async () => {
   const oldFetch = global.fetch;
   let requestBody: Record<string, any> | null = null;

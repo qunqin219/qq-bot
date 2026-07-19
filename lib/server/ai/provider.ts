@@ -86,6 +86,9 @@ export interface LLMProvider {
   // 追加一次普通用户输入（例如泄漏修复提示）。
   appendUserMessage(body: any, text: string): void;
 
+  // 关闭请求体中的所有工具，要求下一轮只能生成最终文本。
+  disableTools(body: any): void;
+
   // 追加模型工具调用原始条目和对应的工具结果。
   appendToolResults(body: any, data: any, results: ToolResult[]): boolean;
 

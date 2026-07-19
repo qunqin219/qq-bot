@@ -86,6 +86,10 @@ const GeminiProvider: LLMProvider = {
     body.contents = [...body.contents, { role: 'user', parts: [{ text }] }];
   },
 
+  disableTools(body: GeminiRequestBody) {
+    delete body.tools;
+  },
+
   appendToolResults(body: GeminiRequestBody, data: GeminiResponse, results: ToolResult[]) {
     const modelContent = data?.candidates?.[0]?.content;
     if (!modelContent) return false;

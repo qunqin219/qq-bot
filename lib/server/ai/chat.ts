@@ -10,7 +10,6 @@ import {
   compactJson,
   previewText,
   toolCallKey,
-  fallbackToolMessages,
   summarizeRequestedFunctionCalls,
 } from './utils.js';
 import { sanitizeModelReply, stripUnrequestedLinks } from './sanitize.js';
@@ -23,6 +22,7 @@ import {
   DEFAULT_HTTP_RETRY_BASE_DELAY_MS,
   MAX_HTTP_RETRY_DELAY_MS,
   THOUGHT_LEAK_REPAIR_PROMPT,
+  TOOL_FINALIZATION_PROMPT,
 } from './types.js';
 
 function getProvider(cfg: AiConfig): LLMProvider {
@@ -85,9 +85,9 @@ async function chat(
   const body = await provider.buildRequestBody(userMessage, history, cfg, options);
   const currentUserContent = provider.getLastUserContent(body);
   const seenToolCalls = new Set();
-  const allToolResults: ToolResult[] = [];
   let executedToolCalls = 0;
   let thoughtLeakRepairCount = 0;
+  let toolFinalizationRequested = false;
   const requestStartedAt = Date.now();
 
   console.log(
@@ -137,7 +137,7 @@ async function chat(
             console.warn(`[AI] ${provider.name} 第${round}轮重试耗尽 status=${resp.status}，本次不回复`);
             return null;
           }
-          return fallbackToolMessages(allToolResults);
+          return null;
         }
 
         const waitMs = retryDelayMs(resp, httpRetryBaseDelayMs * (2 ** attempt));
@@ -208,16 +208,24 @@ async function chat(
           return reply;
         }
         console.warn(`[AI] ${provider.name} 返回空回复:`, JSON.stringify(data).slice(0, 500));
-        return fallbackToolMessages(allToolResults);
+        return null;
       }
 
       console.log(
         `[ToolAudit] model_requested round=${round} requested=${compactJson(summarizeRequestedFunctionCalls(functionCalls))}`
       );
 
+      if (toolFinalizationRequested) {
+        console.warn(
+          `[AI] ${provider.name} 已关闭工具但模型仍请求调用，停止回复 round=${round} ` +
+          `executed=${executedToolCalls}`
+        );
+        return sanitizedReply.blocked ? null : (reply || null);
+      }
+
       if (round > maxToolRounds || executedToolCalls >= maxToolCalls) {
         console.warn(`[AI] 工具调用达到限制 round=${round} executed=${executedToolCalls}`);
-        return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
+        return sanitizedReply.blocked ? null : (reply || null);
       }
 
       const roundToolResults: ToolResult[] = [];
@@ -275,12 +283,11 @@ async function chat(
         });
         const item = { callId: call.callId, name: call.name, response };
         roundToolResults.push(item);
-        allToolResults.push(item);
       }
 
       if (roundToolResults.length === 0) {
         console.warn('[AI] 模型请求工具但没有可执行调用，停止工具循环');
-        return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
+        return sanitizedReply.blocked ? null : (reply || null);
       }
 
       const preparedToolResults = provider.prepareToolResults
@@ -292,7 +299,17 @@ async function chat(
 
       if (!provider.appendToolResults(body, data, preparedToolResults)) {
         console.warn('[AI] 模型请求工具但缺少可继续的响应条目，停止工具循环');
-        return sanitizedReply.blocked ? fallbackToolMessages(allToolResults) : (reply || fallbackToolMessages(allToolResults));
+        return sanitizedReply.blocked ? null : (reply || null);
+      }
+
+      if (round >= maxToolRounds || executedToolCalls >= maxToolCalls) {
+        provider.disableTools(body);
+        provider.appendUserMessage(body, TOOL_FINALIZATION_PROMPT);
+        toolFinalizationRequested = true;
+        console.warn(
+          `[AI] ${provider.name} 工具调用达到限制，关闭工具并请求最终回答 ` +
+          `round=${round} executed=${executedToolCalls}`
+        );
       }
     }
 
@@ -300,11 +317,11 @@ async function chat(
       `[AI] ${provider.name} 工具循环结束但没有最终文本 duration_ms=${Date.now() - requestStartedAt} ` +
       `tool_calls=${executedToolCalls}`
     );
-    return fallbackToolMessages(allToolResults);
+    return null;
   } catch (e: unknown) {
     if (options.signal?.aborted) throw e;
     console.error(`[AI] 调用 ${provider.name} 异常:`, errorMessage(e));
-    return fallbackToolMessages(allToolResults);
+    return null;
   }
 }
 

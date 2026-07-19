@@ -198,6 +198,11 @@ const OpenAIProvider: LLMProvider = {
     body.input.push({ role: 'user', content: [{ type: 'input_text', text }] });
   },
 
+  disableTools(body: OpenAIRequestBody) {
+    delete body.tools;
+    delete body.include;
+  },
+
   appendToolResults(body: OpenAIRequestBody, data: OpenAIResponse, results: ToolResult[]) {
     return appendToolResults(body, data, results);
   },

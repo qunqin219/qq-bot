@@ -1,6 +1,6 @@
 // 模型无关的工具函数 —— CQ 码处理、文本格式化、工具去重等
 
-import type { FunctionCall, ToolResult } from './types.js';
+import type { FunctionCall } from './types.js';
 import type { ImageRecord } from '../image-cache.js';
 
 import * as imageCache from '../image-cache.js';
@@ -81,13 +81,6 @@ function toolCallKey(call: FunctionCall): string {
   return `${call.name}:${stableStringify(call.args || {})}`;
 }
 
-function fallbackToolMessages(toolResults: ToolResult[]): string | null {
-  return toolResults
-    .map((item) => item.response?.message)
-    .filter(Boolean)
-    .join('\n') || null;
-}
-
 function compactJson(value: unknown, maxLength = 900): string {
   let text: string;
   try {
@@ -124,7 +117,6 @@ export {
   stripCqCodes,
   stableStringify,
   toolCallKey,
-  fallbackToolMessages,
   compactJson,
   previewText,
   summarizeRequestedFunctionCalls,
